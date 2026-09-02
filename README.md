@@ -1,185 +1,116 @@
-﻿# ZAPRET GUI
+﻿## [Русский](#русский) | [English](#english)
 
-**EN:** A fork of original [zapret](https://github.com/bol-van/zapret) with a Windows 10/11 GUI. The runtime pack is [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube). This GUI does not patch official strategies: it connects a zapret folder, installs the chosen strategy as a Windows service, and checks Discord and YouTube.
+# ZAPRET GUI
 
-**RU:** Форк оригинального [zapret](https://github.com/bol-van/zapret) с графической оболочкой для Windows 10/11. В качестве сборки используется [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube). Сама программа не меняет стратегии zapret: она подключает папку zapret, ставит выбранную стратегию как службу Windows и помогает проверить Discord и YouTube.
+[![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?logo=windows&logoColor=white)](https://github.com/surensuccessful-ui/zapret-gui/releases/latest)
+[![Release](https://img.shields.io/github/v/release/surensuccessful-ui/zapret-gui?label=release)](https://github.com/surensuccessful-ui/zapret-gui/releases/latest)
+[![Made with Cursor](https://img.shields.io/badge/Made%20with-Cursor-000000?logo=cursor&logoColor=white)](https://cursor.com)
 
-Python is not required. / Python не нужен.
+**Форк оригинального [zapret](https://github.com/bol-van/zapret)** с графической оболочкой для Windows. Движок — сборка [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube).
 
----
+Проект сделан в [Cursor](https://cursor.com). Python не нужен.
 
-## Download / Скачать
+**[Скачать ZapretGUI.exe](https://github.com/surensuccessful-ui/zapret-gui/releases/latest)**
 
-Latest Windows build (Win10/Win11): see **[Releases](https://github.com/surensuccessful-ui/zapret-gui/releases/latest)**.
-
-Friends only need `ZapretGUI.exe`. Zapret itself is downloaded or selected on first run.
-
-Друзьям достаточно `ZapretGUI.exe`. Папку zapret программа найдёт, скачает или предложит указать самой.
-
-Windows SmartScreen may warn because the file is unsigned. Choose **More info → Run anyway**.
-
-Windows SmartScreen может показать предупреждение: файл не подписан. Выберите **«Подробнее» → «Выполнить в любом случае»**.
-
----
-
-## English
-
-### What this is
-
-ZAPRET GUI is a **fork of original [zapret](https://github.com/bol-van/zapret)** (by bol-van). On Windows it uses the [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) package as the engine.
-
-The GUI itself is a wrapper only. It never edits `general*.bat`, `service.bat`, or other files inside the zapret package (GitHub updates overwrite those). Extra sites go into zapret **user lists** (`lists\list-general-user.txt` and other `*user*.txt` files).
-
-### Requirements
-
-- Windows 10 or 11
-- Administrator rights (UAC). The GUI needs them to install and control the `zapret` service.
-
-### Run
-
-1. Start `ZapretGUI.exe` and accept UAC.
-2. Only one copy can run. A second launch shows that the program is already open.
-3. On launch the GUI enables Windows startup: **ZAPRET GUI** in Task Manager → Startup, plus scheduled task `ZapretGUI` with highest privileges so logon does not show UAC again. After sign-in the GUI opens in the tray. Bypass still comes from the `zapret` service.
-4. Prompts (download zapret, run tests, errors) use dark Discord-style dialogs.
-5. The close button hides the window to the tray. Bypass keeps running. Use **Exit** in the tray menu to quit the GUI.
-
-Closing the GUI **does not** stop the zapret service.
-
-### First run
-
-The program checks saved settings and whether a zapret folder is next to the EXE or at the saved path.
-
-If zapret is missing:
-
-- **Yes** — download the latest official Flowseal build from GitHub
-- **No** — pick an existing folder
-- **Cancel** — open the GUI without zapret and set it up later
-
-After a folder is connected, the GUI can test all strategies, pick the best one (at least one successful target check), and install it as a Windows service with automatic start. You can skip this and do it later with **Auto-test best → service**.
-
-### Zapret updates
-
-While the GUI is running (including in the tray), it checks GitHub once a day. If a new zapret build exists, Windows shows a balloon once, then the GUI downloads it and reinstalls the same strategy. If that strategy fails on the new build, it offers a full test.
-
-### Main window
-
-| Control | Action |
-| --- | --- |
-| Gear | Opens settings |
-| Status | Green — zapret is running, red — not running, grey — no zapret folder |
-| **Start / Start service / Restart service / Install and start** | Controls the zapret service |
-| **Stop** | Stops the zapret service and this install’s `winws.exe` |
-| **DISCORD** / **YOUTUBE** cards | Live reachability. Click a card to check now |
-| Site field + **Add site** | Adds a domain to the current user list |
-| Update banner | Newer zapret on GitHub. **Release** opens the Flowseal releases page |
-
-### Settings
-
-Strategy, service install/remove, strategy tests, user lists, health-check interval (1–1440 minutes), and the log live in the second window. The log stays at the bottom. The official zapret package is not rewritten.
-
-A saved `ZapretPath` wins over nearby-folder discovery.
-
-### What is stored
-
-`zapret-gui.settings.json` next to the EXE (or `%APPDATA%\ZapretGUI\settings.json`): zapret path, last strategy, last list, restart-after-edit, health interval, first-run flag. Site lists stay in the zapret `lists` folder.
+<p>
+  <img src="docs/screenshots/main.png" alt="Главное окно ZAPRET GUI" width="820">
+</p>
+<p>
+  <img src="docs/screenshots/settings.png" alt="Окно настроек ZAPRET GUI" width="820">
+</p>
 
 ---
 
 ## Русский
 
-### Что это
+Графическая оболочка для zapret: подключает папку сборки Flowseal, ставит выбранную стратегию службой Windows и показывает, открываются ли Discord и YouTube. Официальные `general*.bat` и `service.bat` программа не меняет.
 
-Это **форк оригинального [zapret](https://github.com/bol-van/zapret)** (автор bol-van). На Windows в качестве движка берётся сборка [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube).
+По умолчанию программа **прописывается в автозапуск Windows**. Кнопка закрытия **сворачивает окно в трей**, обход при этом не останавливается.
 
-Сама GUI — только оболочка. Она не правит `general*.bat`, `service.bat` и другие файлы пакета zapret (обновления с GitHub их затрут). Сайты добавляются только в **пользовательские списки** zapret (`lists\list-general-user.txt` и другие `*user*.txt`).
+### Возможности
 
-### Требования
+- Запуск, стоп и перезапуск службы zapret в один клик
+- Живые карточки Discord и YouTube с задержкой
+- Автоподбор лучшей стратегии и установка её службой
+- Добавление сайтов только в пользовательские списки (`*user*.txt`)
+- Сворачивание в трей (закрытие окна не выключает обход)
+- Автозапуск Windows по умолчанию: запись в «Автозагрузке» и задача Планировщика без повторного UAC
+- Автопроверка новой сборки zapret на GitHub, пока GUI запущен
+- Одна копия программы: вторая не откроется
 
-- Windows 10 или 11
-- Права администратора (UAC), иначе службу zapret поставить нельзя
+### Установка
 
-### Запуск
+Установка не нужна.
 
-1. Запустите `ZapretGUI.exe` и подтвердите UAC.
-2. Одновременно можно открыть только одну копию. Если программа уже запущена, появится сообщение, и вторая копия не откроется.
-3. При запуске программа сама включает автозагрузку Windows: запись **ZAPRET GUI** в диспетчере задач → «Автозагрузка» и задачу Планировщика `ZapretGUI` с правами администратора, чтобы не показывать UAC при входе. После входа оболочка поднимается в трей. Обход по-прежнему даёт служба zapret.
-4. Вопросы программы показаны в тёмных окнах в стиле Discord.
-5. Кнопка закрытия сворачивает программу в трей. Обход не останавливается. Чтобы выйти полностью, выберите **Выход** в меню иконки в трее.
+1. Скачайте `ZapretGUI.exe` со страницы [Releases](https://github.com/surensuccessful-ui/zapret-gui/releases/latest).
+2. Запустите файл и подтвердите UAC. Без прав администратора службу zapret поставить нельзя.
+3. Если Windows покажет SmartScreen: **Подробнее → Выполнить в любом случае**.
 
-Закрытие окна GUI **не останавливает** службу zapret. Обход продолжает работать в фоне.
+Папку zapret программа скачает с GitHub или предложит указать самой. Рядом с EXE ничего класть не обязательно.
 
-### Первый запуск
+### Как пользоваться
 
-Программа проверяет сохранённые настройки и ищет папку zapret рядом с EXE или по сохранённому пути.
+1. После первого запуска согласитесь скачать официальную сборку Flowseal или выберите уже установленную папку.
+2. При желании прогоните **Автотест лучшей → служба**: программа проверит стратегии и поставит лучшую в автозапуск Windows.
+3. На главном окне смотрите статус службы и карточки Discord / YouTube. Сайт, который не открывается, можно добавить в список.
+4. Крестик сворачивает GUI в трей. Обход продолжает работать. Полный выход — пункт **Выход** в меню иконки в трее.
+5. Автозапуск GUI включается сам при первом запуске (диспетчер задач → Автозагрузка → **ZAPRET GUI**).
 
-Если zapret не найден:
+Закрытие окна **не останавливает** службу zapret.
 
-- **Да** — скачать последнюю официальную сборку Flowseal с GitHub
-- **Нет** — указать уже установленную папку
-- **Отмена** — открыть программу без zapret и настроить позже
+### Оригинальные репозитории
 
-После подключения папки можно прогнать все стратегии, выбрать лучшую (нужна хотя бы одна успешная проверка) и установить её как службу с автозапуском Windows. Это можно пропустить и сделать позже кнопкой **Автотест лучшей → служба**.
+1. [bol-van/zapret](https://github.com/bol-van/zapret) — оригинальный zapret  
+2. [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) — Windows-сборка и стратегии  
 
-Настройки сохраняются сразу: путь к zapret, стратегия, список сайтов, интервал проверки и флаг первого запуска.
+Поддержать автора zapret можно [на странице оригинального проекта](https://github.com/bol-van/zapret?tab=readme-ov-file#%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-%D1%80%D0%B0%D0%B7%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D1%87%D0%B8%D0%BA%D0%B0).
 
-### Обновления zapret
+---
 
-Пока программа запущена (в том числе в трее), раз в сутки она проверяет GitHub. Если вышла новая сборка zapret, Windows покажет уведомление один раз, затем программа сама скачает её и перезапустит службу с прежней стратегией. Если эта стратегия на новой сборке не работает, появится вопрос, запустить ли полный тест.
+## English
 
-### Главное окно
+A **fork of original [zapret](https://github.com/bol-van/zapret)** with a Windows GUI. The engine is [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube).
 
-| Элемент | Что делает |
-| --- | --- |
-| Значок шестерёнки | Открывает окно настроек |
-| Индикатор статуса | Зелёный — zapret работает, красный — не запущен, серый — папка zapret не подключена |
-| **Запустить / Запустить службу / Перезапустить службу / Установить и запустить** | Управляет службой zapret |
-| **Стоп** | Останавливает службу zapret и связанный `winws.exe` этой сборки |
-| Карточки **DISCORD** и **YOUTUBE** | Доступность серверов. Нажмите, чтобы проверить сразу |
-| Поле сайта и **Добавить сайт** | Добавляет домен в текущий пользовательский список |
-| Баннер обновления | Более новая сборка zapret на GitHub. Кнопка **Релиз** открывает страницу релизов |
+Built with [Cursor](https://cursor.com). Python is not required.
 
-После запуска или перезапуска службы карточки Discord/YouTube обновляются сразу. Дальше проверка идёт по интервалу из настроек.
+The GUI connects a zapret folder, installs the chosen strategy as a Windows service, and checks Discord and YouTube. It does not patch official strategy files.
 
-### Окно настроек
+By default the app **registers itself in Windows Startup**. The close button **hides the window to the tray**; bypass keeps running.
 
-В нём — путь к zapret, стратегии, служба, тесты, пользовательские списки, интервал автопроверки (1–1440 минут) и лог внизу окна. Официальные стратегии и `list-general.txt` программа не переписывает.
+### Features
 
-Сохранённый путь важнее автоматического поиска рядом с программой.
+- Start, stop, and restart the zapret service in one click
+- Live Discord and YouTube cards with latency
+- Auto-test strategies and install the best one as a service
+- Add sites only to user lists (`*user*.txt`)
+- Minimize to tray (closing the window does not stop bypass)
+- Windows Startup enabled by default (Task Manager Startup entry plus an elevated scheduled task, no extra UAC at logon)
+- Daily GitHub check for a newer zapret build while the GUI is running
+- Single instance: a second copy will not open
 
-### Стратегия и служба
+### Install
 
-| Элемент | Что делает |
-| --- | --- |
-| Список **СТРАТЕГИЯ** | Выбирает файл стратегии из папки zapret |
-| **Перезапустить** | Перезапускает службу zapret или, если службы нет, запускает выбранную стратегию |
-| **В службу** | Ставит выбранную стратегию как службу `zapret` с автозапуском Windows |
-| **Снять службу** | Удаляет службу `zapret` и останавливает обход |
+No installer.
 
-### Тесты стратегий
+1. Download `ZapretGUI.exe` from [Releases](https://github.com/surensuccessful-ui/zapret-gui/releases/latest).
+2. Run it and accept UAC. Administrator rights are required to install the zapret service.
+3. If SmartScreen appears: **More info → Run anyway**.
 
-| Элемент | Что делает |
-| --- | --- |
-| **Автотест лучшей → служба** | Проверяет все стратегии, выбирает лучшую по успешным проверкам и ставит её службой |
-| **Тест текущей** | Проверяет только выбранную стратегию |
-| **Тест всех** | Прогоняет все стратегии и пишет отчёт, службу не ставит |
-| **Стоп теста** | Прерывает текущий прогон |
-| **Консольный тест zapret** | Запускает штатный тест из папки zapret, если он есть |
+The program downloads zapret from GitHub or asks you to pick an existing folder.
 
-Во время теста интернет может кратко переключаться. Стратегия без успешных проверок лучшей не считается.
+### How to use
 
-### Списки сайтов
+1. On first run, download the official Flowseal pack or select a folder you already have.
+2. Optionally run **Auto-test best → service** to pick a working strategy and install it.
+3. Use the main window for service status and Discord / YouTube checks. Add a site if it does not open.
+4. The close button hides the GUI to the tray. Use **Exit** in the tray menu to quit.
+5. Autostart is enabled on first launch (Task Manager → Startup → **ZAPRET GUI**).
 
-Сайты нужно добавлять только в пользовательские файлы (`*user*.txt`). Если выбранный файл не подключён текущей стратегией, в подсказке будет предупреждение. Для обычного обхода нужен `list-general-user.txt`.
+Closing the window **does not** stop the zapret service.
 
-### Что сохраняется
+### Original repositories
 
-Файл `zapret-gui.settings.json` рядом с EXE (если туда нельзя писать — в `%APPDATA%\ZapretGUI\settings.json`):
+1. [bol-van/zapret](https://github.com/bol-van/zapret) — original zapret  
+2. [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) — Windows pack and strategies  
 
-- путь к zapret;
-- последняя стратегия;
-- последний открытый список;
-- перезапуск после правки списков;
-- интервал автопроверки;
-- отметка, что первый запуск уже пройден.
-
-Списки сайтов хранятся в папке zapret: `lists\list-general-user.txt` и другие `*user*.txt`.
+You can support the original zapret author [here](https://github.com/bol-van/zapret?tab=readme-ov-file#%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-%D1%80%D0%B0%D0%B7%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D1%87%D0%B8%D0%BA%D0%B0).
