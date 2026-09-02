@@ -13,7 +13,7 @@
 
 Проект сделан в [Cursor](https://cursor.com). Python не нужен.
 
-**[Скачать ZapretGUI.exe](https://github.com/surensuccessful-ui/zapret-gui/releases/latest)**
+**[Скачать ZapretGUI.exe](https://github.com/surensuccessful-ui/zapret-gui/releases/latest)** · [версии проекта](CHANGELOG.md)
 
 <p>
   <img src="docs/screenshots/main.png" alt="Главное окно ZAPRET GUI" width="820">
@@ -36,6 +36,7 @@
 - Живые карточки Discord и YouTube с задержкой
 - Автоподбор лучшей стратегии и установка её службой
 - Добавление сайтов только в пользовательские списки (`*user*.txt`)
+- Тест своих URL разными стратегиями (кнопка «Тест сайтов»)
 - Сворачивание в трей (закрытие окна не выключает обход)
 - Автозапуск Windows по умолчанию: запись в «Автозагрузке» и задача Планировщика без повторного UAC
 - Автопроверка новой сборки zapret на GitHub, пока GUI запущен
@@ -77,11 +78,17 @@ Get-FileHash .\ZapretGUI.exe -Algorithm SHA256
 
 1. После первого запуска согласитесь скачать официальную сборку Flowseal или выберите уже установленную папку.
 2. При желании прогоните **Автотест лучшей → служба**: программа проверит стратегии и поставит лучшую в автозапуск Windows.
-3. На главном окне смотрите статус службы и карточки Discord / YouTube. Сайт, который не открывается, можно добавить в список.
+3. На главном окне смотрите статус службы и карточки Discord / YouTube. Сайт, который не открывается, можно добавить в список. Если после этого он всё равно не открывается — **Тест сайтов**: программа прогонит стратегии по вашим URL.
 4. Крестик сворачивает GUI в трей. Обход продолжает работать. Полный выход — пункт **Выход** в меню иконки в трее.
 5. Автозапуск GUI включается сам при первом запуске (диспетчер задач → Автозагрузка → **ZAPRET GUI**).
 
 Закрытие окна **не останавливает** службу zapret.
+
+### Версии проекта
+
+Номер GUI — файл `VERSION`. Снимки **всего репозитория** (не только EXE) — git-теги. Как откатиться и что вошло в каждую версию: [CHANGELOG.md](CHANGELOG.md).
+
+Первый публичный снимок: [`v1.0.20`](https://github.com/surensuccessful-ui/zapret-gui/tree/v1.0.20).
 
 ### Оригинальные репозитории
 
@@ -122,6 +129,7 @@ By default the app **registers itself in Windows Startup**. The close button **h
 - Live Discord and YouTube cards with latency
 - Auto-test strategies and install the best one as a service
 - Add sites only to user lists (`*user*.txt`)
+- Test your own URLs against every strategy (the **Test sites** button)
 - Minimize to tray (closing the window does not stop bypass)
 - Windows Startup enabled by default (Task Manager Startup entry plus an elevated scheduled task, no extra UAC at logon)
 - Daily GitHub check for a newer zapret build while the GUI is running
@@ -163,11 +171,17 @@ Get-FileHash .\ZapretGUI.exe -Algorithm SHA256
 
 1. On first run, download the official Flowseal pack or select a folder you already have.
 2. Optionally run **Auto-test best → service** to pick a working strategy and install it.
-3. Use the main window for service status and Discord / YouTube checks. Add a site if it does not open.
+3. Use the main window for service status and Discord / YouTube checks. Add a site if it does not open. If it still fails, use **Test sites** to try every strategy against your URLs.
 4. The close button hides the GUI to the tray. Use **Exit** in the tray menu to quit.
 5. Autostart is enabled on first launch (Task Manager → Startup → **ZAPRET GUI**).
 
 Closing the window **does not** stop the zapret service.
+
+### Project versions
+
+The GUI number is the `VERSION` file. Git tags snapshot the **whole repository**, not only the EXE. Restore steps and notes: [CHANGELOG.md](CHANGELOG.md).
+
+First public snapshot: [`v1.0.20`](https://github.com/surensuccessful-ui/zapret-gui/tree/v1.0.20).
 
 ### Original repositories
 

@@ -136,6 +136,7 @@ using System.Windows.Threading;
 public static class ZapretUiHost {
     static Window _main;
     static Window _settings;
+    static Window _siteTest;
     static string _dialogResult = "Cancel";
 
     static object Ok() { return true; }
@@ -359,6 +360,48 @@ public static class ZapretUiHost {
         if (_settings != null) _settings.DragMove();
         return Ok();
     }
+    public static Window LoadSiteTest(string xaml) {
+        _siteTest = (Window)XamlReader.Parse(xaml);
+        ApplyChrome(_siteTest);
+        return _siteTest;
+    }
+    public static object AttachSiteTestOwner() {
+        if (_siteTest == null || _main == null || !_main.IsVisible) return Ok();
+        _siteTest.Owner = _main;
+        return Ok();
+    }
+    public static object ShowSiteTest() {
+        if (_siteTest == null) return Ok();
+        AttachSiteTestOwner();
+        if (_siteTest.Owner == null) {
+            _siteTest.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        } else {
+            _siteTest.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        }
+        _siteTest.ShowInTaskbar = true;
+        if (!_siteTest.IsVisible) _siteTest.Show();
+        if (_siteTest.WindowState == WindowState.Minimized) _siteTest.WindowState = WindowState.Normal;
+        _siteTest.Activate();
+        _siteTest.Topmost = true;
+        _siteTest.Topmost = false;
+        return Ok();
+    }
+    public static object HideSiteTest() {
+        if (_siteTest != null) _siteTest.Hide();
+        return Ok();
+    }
+    public static object CloseSiteTest() {
+        if (_siteTest != null) _siteTest.Close();
+        return Ok();
+    }
+    public static object MinimizeSiteTest() {
+        if (_siteTest != null) _siteTest.WindowState = WindowState.Minimized;
+        return Ok();
+    }
+    public static object DragSiteTest() {
+        if (_siteTest != null) _siteTest.DragMove();
+        return Ok();
+    }
     public static object StartMainLoop() {
         if (_main == null) throw new InvalidOperationException("Main window is not loaded.");
         DispatcherFrame frame = new DispatcherFrame();
@@ -429,6 +472,9 @@ $script:LastRunning = $null
 $script:Restarting = $false
 $script:TestBusy = $false
 $script:TestCancel = $false
+$script:SiteTestBusy = $false
+$script:AllowSiteTestClose = $false
+$script:SiteTestLogQueue = [System.Collections.Concurrent.ConcurrentQueue[object]]::new()
 $script:Watcher = $null
 $script:WatchTimer = $null
 $script:HealthIntervalMinutes = 1
@@ -792,15 +838,17 @@ function Initialize-TrayIcon {
 
 function Hide-MainToTray {
     if ($script:SettingsWindow) { $hiddenSettings = [ZapretUiHost]::HideSettings() }
+    try { $hiddenSite = [ZapretUiHost]::HideSiteTest() } catch { }
     $hidden = [ZapretUiHost]::HideMain()
     Show-WindowsNotify 'ZAPRET GUI' 'Программа свёрнута в трей. Обход продолжает работать.'
 }
 
 function Exit-ZapretGui {
-    if ($script:TestBusy) {
+    if ($script:TestBusy -or $script:SiteTestBusy) {
         $answer = Show-ZapretDialog -Title 'ZAPRET GUI' -Buttons 'YesNo' -Message "Сейчас выполняется тест стратегий.`nЗавершить тест и закрыть программу?"
         if ($answer -ne 'Yes') { return }
         if ($script:TestSync) { $script:TestSync.Cancel = $true }
+        if ($script:SiteTestSync) { $script:SiteTestSync.Cancel = $true }
         Add-Log 'Тест остановлен при выходе из программы' '#E8C36A'
     }
     $script:AllowMainClose = $true
@@ -1475,6 +1523,90 @@ function Stop-Zapret {
     Start-Sleep -Milliseconds 350
 }
 
+function Get-OwnedWinwsPrefix {
+    param([string]$Root)
+    if ([string]::IsNullOrWhiteSpace($Root)) { return '' }
+    return ($Root.TrimEnd('\') + '\')
+}
+
+function Stop-OwnedWinws {
+    param([string]$Root = $script:Root)
+    $prefix = Get-OwnedWinwsPrefix $Root
+    if (-not $prefix) { return }
+    foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name = 'winws.exe'" -ErrorAction SilentlyContinue)) {
+        $path = [string]$p.ExecutablePath
+        if ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Start-Sleep -Milliseconds 250
+}
+
+function Wait-OwnedWinws {
+    param([string]$Root = $script:Root, [int]$TimeoutMs = 8000)
+    $prefix = Get-OwnedWinwsPrefix $Root
+    if (-not $prefix) { return $false }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
+        foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name = 'winws.exe'" -ErrorAction SilentlyContinue)) {
+            $path = [string]$p.ExecutablePath
+            if ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                Start-Sleep -Milliseconds 400
+                return $true
+            }
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    return $false
+}
+
+function Get-ZapretRuntimeSnapshot {
+    $state = Get-ZapretState
+    return @{
+        ServiceInstalled = [bool]$state.ServiceInstalled
+        ServiceRunning   = [bool]$state.ServiceRunning
+        ManualRunning    = [bool]($state.ThisBuildRunning -and -not $state.ServiceInstalled)
+        Strategy         = [string](Get-PreferredStrategyName)
+    }
+}
+
+function Restore-ZapretRuntimeSnapshot {
+    param($Snap)
+    if (-not $Snap) { return }
+    Stop-OwnedWinws
+    if ($Snap.ServiceInstalled) {
+        $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+        if ($svc -and $Snap.ServiceRunning) {
+            Start-Service -Name 'zapret' -ErrorAction SilentlyContinue
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $deadline) {
+                try { $svc.Refresh() } catch { }
+                if ($svc.Status -eq 'Running') { break }
+                Start-Sleep -Milliseconds 300
+            }
+            Add-Log 'Служба zapret возвращена после теста сайтов' '#6EC6FF'
+        }
+        return
+    }
+    if ($Snap.ManualRunning -and $Snap.Strategy) {
+        try {
+            Start-StrategyFile $Snap.Strategy
+            Add-Log "Стратегия возвращена после теста: $($Snap.Strategy)" '#6EC6FF'
+        } catch {
+            Add-Log "Не удалось вернуть стратегию: $($_.Exception.Message)" '#FF8A8A'
+        }
+    }
+}
+
+function Suspend-ZapretForSiteTest {
+    $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -ne 'Stopped') {
+        Stop-Service -Name 'zapret' -Force -ErrorAction Stop
+        Add-Log 'Служба zapret временно остановлена для теста сайтов' '#E8C36A'
+    }
+    Stop-OwnedWinws
+}
+
 function Start-StrategyFile {
     param([string]$Name)
     if ([string]::IsNullOrWhiteSpace($Name)) { throw 'Выберите стратегию.' }
@@ -1743,6 +1875,7 @@ function Start-LiveHealthCheck {
     if ($Force) { $script:HealthCheckPending = $true }
     if ($script:HealthBusy) { return }
     if ($script:TestBusy) { return }
+    if ($script:SiteTestBusy) { return }
     if ($script:SetupSync -and -not $script:SetupSync.Done) { return }
     if (-not $script:Root) { return }
     if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) { return }
@@ -2123,10 +2256,454 @@ function Set-TestUi {
     $script:BtnTestAll.IsEnabled = -not $Busy
     if ($script:BtnAutoBest) { $script:BtnAutoBest.IsEnabled = -not $Busy }
     if ($script:BtnInstallService) { $script:BtnInstallService.IsEnabled = -not $Busy }
-    $script:BtnCheckSite.IsEnabled = -not $Busy
-    $script:BtnCancelTest.IsEnabled = $Busy
+    if ($script:BtnCheckSite) { $script:BtnCheckSite.IsEnabled = -not $Busy }
+    if ($script:BtnCancelTest) { $script:BtnCancelTest.IsEnabled = $Busy }
     $script:BtnStart.IsEnabled = -not $Busy
     $script:BtnRestart.IsEnabled = -not $Busy
+    if ($script:BtnSiteTest) { $script:BtnSiteTest.IsEnabled = -not $Busy }
+    if ($script:BtnSiteTestSettings) { $script:BtnSiteTestSettings.IsEnabled = -not $Busy }
+    if ($script:BtnSiteTestStart) { $script:BtnSiteTestStart.IsEnabled = -not $Busy }
+    if ($script:BtnSiteTestStop) { $script:BtnSiteTestStop.IsEnabled = $Busy }
+    if ($script:TxtSiteUrls) { $script:TxtSiteUrls.IsEnabled = -not $Busy }
+}
+
+function ConvertTo-SiteTestTarget {
+    param([string]$Raw)
+    if ([string]::IsNullOrWhiteSpace($Raw)) { return $null }
+    $value = $Raw.Trim()
+    if ($value.StartsWith('#')) { return $null }
+    $hostName = ConvertTo-HostName $value
+    if (-not $hostName) { return $null }
+    $scheme = 'https'
+    if ($value -match '^(https?)://') { $scheme = $Matches[1].ToLowerInvariant() }
+    return [pscustomobject]@{
+        Name = $hostName
+        Host = $hostName
+        Url  = "${scheme}://${hostName}/"
+    }
+}
+
+function Parse-SiteTestTargets {
+    param([string]$Text)
+    $seen = @{}
+    $list = [System.Collections.Generic.List[object]]::new()
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
+    foreach ($part in @($Text -split '[\r\n,;]+')) {
+        $t = ConvertTo-SiteTestTarget $part
+        if (-not $t) { continue }
+        $key = [string]$t.Host
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        $list.Add($t)
+    }
+    return $list.ToArray()
+}
+
+function Ensure-HostsInGeneralUserList {
+    param([string[]]$Hosts)
+    if (-not $script:Lists) { return }
+    if (-not (Test-Path -LiteralPath $script:Lists)) {
+        New-Item -ItemType Directory -Path $script:Lists -Force | Out-Null
+    }
+    $path = Join-Path $script:Lists 'list-general-user.txt'
+    $current = [System.Collections.Generic.List[string]]::new()
+    if (Test-Path -LiteralPath $path) {
+        foreach ($item in (Read-ListEntries -Path $path -Dummy $script:DummyHost)) { $current.Add($item) }
+    }
+    $added = [System.Collections.Generic.List[string]]::new()
+    foreach ($h in $Hosts) {
+        if ([string]::IsNullOrWhiteSpace($h)) { continue }
+        $exists = $false
+        foreach ($item in $current) {
+            if ([string]::Equals($item, $h, 'OrdinalIgnoreCase')) { $exists = $true; break }
+        }
+        if ($exists) { continue }
+        $current.Add($h)
+        $added.Add($h)
+    }
+    if ($added.Count -gt 0) {
+        Save-ListEntries -Path $path -Entries $current.ToArray() -Dummy $script:DummyHost -KeepComment
+        Add-Log ('В list-general-user.txt добавлено: ' + ($added.ToArray() -join ', ')) '#3DDC97'
+        Refresh-SiteList
+    }
+    Invoke-LoadUserLists
+}
+
+function Add-SiteTestLog {
+    param([string]$Message, [string]$Color = '#B5BAC1')
+    Add-Log $Message $Color
+    $script:SiteTestLogQueue.Enqueue([pscustomobject]@{ Message = $Message; Color = $Color; Time = (Get-Date) })
+}
+
+function Flush-SiteTestLogQueue {
+    if (-not $script:SiteTestLog) { return }
+    $item = $null
+    $n = 0
+    while ($script:SiteTestLogQueue.TryDequeue([ref]$item)) {
+        $run = [Windows.Documents.Run]::new()
+        $run.Text = '{0}  {1}' -f $item.Time.ToString('HH:mm:ss'), $item.Message
+        $run.Foreground = ConvertTo-Brush $item.Color
+        $p = [Windows.Documents.Paragraph]::new()
+        $p.Margin = [Windows.Thickness]::new(0)
+        $p.Inlines.Add($run)
+        $script:SiteTestLog.Document.Blocks.Add($p)
+        $n++
+    }
+    if ($n -gt 0) {
+        while ($script:SiteTestLog.Document.Blocks.Count -gt 500) {
+            $script:SiteTestLog.Document.Blocks.Remove($script:SiteTestLog.Document.Blocks.FirstBlock)
+        }
+        $script:SiteTestLog.ScrollToEnd()
+    }
+}
+
+function Update-SiteTestProgress {
+    if (-not $script:LblSiteTestStatus -or -not $script:SiteTestSync) { return }
+    $i = [int]$script:SiteTestSync.Index
+    $n = [int]$script:SiteTestSync.Total
+    $name = [string]$script:SiteTestSync.Name
+    $stage = [string]$script:SiteTestSync.Stage
+    if ($stage -eq 'done') { return }
+    if ($n -gt 0 -and $i -gt 0) {
+        $script:LblSiteTestStatus.Text = "Стратегия $i из $n · $name"
+        if ($script:PrgSiteTest) {
+            $script:PrgSiteTest.IsIndeterminate = $false
+            $script:PrgSiteTest.Value = [Math]::Floor(100.0 * ($i - 1) / $n)
+        }
+    } else {
+        $script:LblSiteTestStatus.Text = 'Запуск теста...'
+        if ($script:PrgSiteTest) { $script:PrgSiteTest.IsIndeterminate = $true }
+    }
+}
+
+function Clear-SiteTestLog {
+    if (-not $script:SiteTestLog) { return }
+    $script:SiteTestLog.Document = [Windows.Documents.FlowDocument]::new()
+}
+
+function Add-SiteTestSeedLine {
+    param(
+        [System.Collections.Generic.List[string]]$Lines,
+        [string]$Value
+    )
+    if (-not $Lines -or [string]::IsNullOrWhiteSpace($Value)) { return }
+    $trim = $Value.Trim()
+    foreach ($existing in $Lines) {
+        if ([string]::Equals($existing, $trim, 'OrdinalIgnoreCase')) { return }
+    }
+    $Lines.Add($trim)
+}
+
+function Show-SiteTestWindow {
+    param([string[]]$Seed)
+    try {
+        if (-not $script:SiteTestWindow) {
+            $missingDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message 'Окно теста сайтов не создано. Перезапустите программу.'
+            return
+        }
+        $lines = [System.Collections.Generic.List[string]]::new()
+        if ($Seed) {
+            foreach ($item in $Seed) { Add-SiteTestSeedLine $lines $item }
+        }
+        if ($lines.Count -eq 0 -and $script:TxtHost -and -not [string]::IsNullOrWhiteSpace($script:TxtHost.Text)) {
+            Add-SiteTestSeedLine $lines ([string]$script:TxtHost.Text)
+        }
+        if ($lines.Count -eq 0 -and $script:LstSites -and $script:LstSites.SelectedItems) {
+            foreach ($s in $script:LstSites.SelectedItems) {
+                Add-SiteTestSeedLine $lines ([string]$s)
+            }
+        }
+        if ($script:TxtSiteUrls -and -not $script:SiteTestBusy -and $lines.Count -gt 0) {
+            if ([string]::IsNullOrWhiteSpace($script:TxtSiteUrls.Text)) {
+                $script:TxtSiteUrls.Text = [string]::Join([Environment]::NewLine, $lines.ToArray())
+            } else {
+                $current = [System.Collections.Generic.List[string]]::new()
+                foreach ($part in @($script:TxtSiteUrls.Text -split '[\r\n]+')) {
+                    Add-SiteTestSeedLine $current $part
+                }
+                foreach ($item in $lines) { Add-SiteTestSeedLine $current $item }
+                $script:TxtSiteUrls.Text = [string]::Join([Environment]::NewLine, $current.ToArray())
+            }
+        }
+        Update-SiteTestHint
+        $shown = [ZapretUiHost]::ShowSiteTest()
+        if ($script:TxtSiteUrls -and -not $script:SiteTestBusy) { $focused = $script:TxtSiteUrls.Focus() }
+    } catch {
+        Add-Log "Окно теста сайтов: $($_.Exception.Message)" '#FF8A8A'
+        $failDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message $_.Exception.Message
+    }
+}
+
+function Update-SiteTestHint {
+    if (-not $script:TxtSiteUrlsHint -or -not $script:TxtSiteUrls) { return }
+    $has = -not [string]::IsNullOrWhiteSpace($script:TxtSiteUrls.Text)
+    $script:TxtSiteUrlsHint.Visibility = if ($has) { 'Collapsed' } else { 'Visible' }
+}
+
+function Start-SiteStrategyTests {
+    if ($script:SiteTestBusy -or $script:TestBusy) {
+        $busyDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message 'Сначала дождитесь окончания текущего теста.'
+        return
+    }
+    if (-not $script:Root) {
+        $needDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message 'Сначала подключите папку zapret.'
+        return
+    }
+    if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
+        $curlDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message 'curl.exe не найден.'
+        return
+    }
+    $targets = Parse-SiteTestTargets ([string]$script:TxtSiteUrls.Text)
+    if ($targets.Count -eq 0) {
+        $emptyDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message 'Введите URL или домен — по одному в строке.`nНапример: instagram.com'
+        return
+    }
+    $names = @()
+    if ($script:CmbStrategy) {
+        foreach ($it in $script:CmbStrategy.Items) { $names += [string]$it }
+    }
+    if ($names.Count -eq 0) {
+        foreach ($f in @(Get-StrategyBats $script:Root)) { $names += $f.Name }
+    }
+    if ($names.Count -eq 0) {
+        $noDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message 'В подключённой папке нет стратегий для теста.'
+        return
+    }
+
+    $warn = "Проверю $($targets.Count) сайт(ов) на $($names.Count) стратегиях.`nСлужба zapret будет временно остановлена и вернётся после теста.`nВо время проверки интернет может кратко переключаться."
+    $ok = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'YesNo' -Message $warn
+    if ($ok -ne 'Yes') { return }
+
+    $hosts = @($targets | ForEach-Object { [string]$_.Host })
+    try {
+        Ensure-HostsInGeneralUserList $hosts
+    } catch {
+        Add-SiteTestLog "Список сайтов: $($_.Exception.Message)" '#E8C36A'
+    }
+
+    $snap = Get-ZapretRuntimeSnapshot
+    try {
+        Suspend-ZapretForSiteTest
+    } catch {
+        Restore-ZapretRuntimeSnapshot $snap
+        $failDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message "Не удалось временно остановить zapret:`n$($_.Exception.Message)"
+        return
+    }
+
+    $payload = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($t in $targets) {
+        $payload.Add(@{ Name = [string]$t.Name; Url = [string]$t.Url })
+    }
+
+    $script:SiteTestBusy = $true
+    $script:TestBusy = $true
+    $script:SiteTestSnapshot = $snap
+    if ($script:BtnSiteTestApplyBest) { $script:BtnSiteTestApplyBest.IsEnabled = $false }
+    Set-TestUi $true
+    Clear-SiteTestLog
+    $script:LblSiteTestStatus.Text = 'Запуск теста...'
+    if ($script:PrgSiteTest) { $script:PrgSiteTest.IsIndeterminate = $true; $script:PrgSiteTest.Value = 0 }
+
+    $sync = [hashtable]::Synchronized(@{
+        Cancel = $false; Done = $false; Cancelled = $false
+        Index = 0; Total = $names.Count; Name = ''; Stage = 'test'
+        Best = ''; BestOk = 0; Report = ''; Error = ''
+    })
+    $script:SiteTestSync = $sync
+    Add-SiteTestLog ("Тест сайтов: {0} URL, {1} стратегий" -f $targets.Count, $names.Count) '#6EC6FF'
+
+    $root = $script:Root
+    $logQ = $script:LogQueue
+    $uiQ = $script:SiteTestLogQueue
+    $script:SiteTestRunspace = [runspacefactory]::CreateRunspace()
+    $script:SiteTestRunspace.ApartmentState = 'MTA'
+    $script:SiteTestRunspace.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $script:SiteTestRunspace
+    $nameList = [System.Collections.Generic.List[string]]::new()
+    foreach ($n in $names) { $nameList.Add($n) }
+    $sitePipeline = $ps.AddScript({
+        param($Root, $Names, $Targets, $LogQueue, $UiQueue, $Sync)
+        function QLog($msg, $color) {
+            $item = [pscustomobject]@{ Message = $msg; Color = $color; Time = Get-Date }
+            $LogQueue.Enqueue($item)
+            $UiQueue.Enqueue($item)
+        }
+        function StopOwned {
+            $prefix = $Root.TrimEnd('\') + '\'
+            foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name = 'winws.exe'" -ErrorAction SilentlyContinue)) {
+                $path = [string]$p.ExecutablePath
+                if ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                    Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+            }
+            Start-Sleep -Milliseconds 250
+        }
+        function WaitOwned([int]$TimeoutMs) {
+            $prefix = $Root.TrimEnd('\') + '\'
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
+                foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name = 'winws.exe'" -ErrorAction SilentlyContinue)) {
+                    $path = [string]$p.ExecutablePath
+                    if ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                        Start-Sleep -Milliseconds 400
+                        return $true
+                    }
+                }
+                Start-Sleep -Milliseconds 200
+            }
+            return $false
+        }
+        function CheckUrl([string]$Url) {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $ok = $false
+            $code = '000'
+            try {
+                $raw = & curl.exe @('-s', '-o', 'NUL', '-w', '%{http_code}', '-m', '6', '--connect-timeout', '3', '--tlsv1.2', $Url) 2>&1 | Out-String
+                $code = ($raw -replace '(?s).*?(\d{3})\s*$', '$1').Trim()
+                if ($code -notmatch '^\d{3}$') { $code = '000' }
+                $ok = ($code -ne '000')
+            } catch { $ok = $false }
+            return @{ Ok = $ok; Code = $code; Ms = [int]$sw.ElapsedMilliseconds }
+        }
+        $report = [System.Collections.Generic.List[string]]::new()
+        $best = $null
+        $bestOk = 0
+        $i = 0
+        try {
+            foreach ($name in $Names) {
+                $i++
+                if ($Sync.Cancel) { QLog 'Тест сайтов прерван' '#E8C36A'; break }
+                $Sync.Index = $i
+                $Sync.Total = $Names.Count
+                $Sync.Name = $name
+                $bat = Join-Path $Root $name
+                QLog ("[{0}/{1}] {2}" -f $i, $Names.Count, $name) '#E8C36A'
+                $report.Add("Config: $name")
+                StopOwned
+                try {
+                    $psi = New-Object Diagnostics.ProcessStartInfo
+                    $psi.FileName = $bat
+                    $psi.WorkingDirectory = $Root
+                    $psi.UseShellExecute = $true
+                    $psi.WindowStyle = 'Hidden'
+                    $p = [Diagnostics.Process]::Start($psi)
+                } catch {
+                    QLog "  не удалось запустить: $($_.Exception.Message)" '#FF8A8A'
+                    $report.Add('  START FAILED')
+                    continue
+                }
+                if (-not (WaitOwned 8000)) {
+                    QLog '  winws этой сборки не стартовал, стратегия пропущена' '#FF8A8A'
+                    $report.Add('  START FAILED')
+                    if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+                    continue
+                }
+                $okUrls = 0
+                foreach ($t in $Targets) {
+                    if ($Sync.Cancel) { break }
+                    $res = CheckUrl ([string]$t.Url)
+                    if ($res.Ok) {
+                        $okUrls++
+                        $line = "  $($t.Name)  OK · $($res.Ms) мс · HTTP $($res.Code)"
+                        QLog $line '#3DDC97'
+                    } else {
+                        $line = "  $($t.Name)  нет ответа"
+                        QLog $line '#FF8A8A'
+                    }
+                    $report.Add($line)
+                }
+                StopOwned
+                if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+                $report.Add("  OPEN=$okUrls / $($Targets.Count)")
+                $report.Add('')
+                QLog "  итог ${name}: открылось $okUrls из $($Targets.Count)" '#6EC6FF'
+                if ($okUrls -gt $bestOk) { $bestOk = $okUrls; $best = $name }
+            }
+        } catch {
+            QLog "Тест сайтов остановился: $($_.Exception.Message)" '#FF8A8A'
+            $Sync.Error = $_.Exception.Message
+        } finally {
+            StopOwned
+            if ($Sync.Cancel) { $Sync.Cancelled = $true }
+            if ($best -and $bestOk -gt 0) {
+                QLog "Лучшая для этих сайтов: $best (открылось $bestOk)" '#3DDC97'
+                $report.Add("Best strategy: $best")
+                $Sync.Best = $best
+                $Sync.BestOk = $bestOk
+            } else {
+                QLog 'Ни одна стратегия не открыла эти сайты' '#FF8A8A'
+            }
+            $Sync.Report = [string]::Join([Environment]::NewLine, $report)
+            $Sync.Stage = 'done'
+            $Sync.Done = $true
+        }
+    }).AddArgument($root).AddArgument($nameList).AddArgument($payload).AddArgument($logQ).AddArgument($uiQ).AddArgument($sync)
+    $script:SiteTestPs = $ps
+    $script:SiteTestHandle = $ps.BeginInvoke()
+}
+
+function Complete-SiteStrategyTests {
+    if (-not $script:SiteTestSync -or -not $script:SiteTestSync.Done) { return }
+    $best = [string]$script:SiteTestSync.Best
+    $bestOk = [int]$script:SiteTestSync.BestOk
+    $cancelled = [bool]$script:SiteTestSync.Cancelled
+    $snap = $script:SiteTestSnapshot
+    $text = [string]$script:SiteTestSync.Report
+    try { $script:SiteTestPs.EndInvoke($script:SiteTestHandle) } catch { }
+    try { $script:SiteTestPs.Dispose() } catch { }
+    try { $script:SiteTestRunspace.Close(); $script:SiteTestRunspace.Dispose() } catch { }
+    $script:SiteTestSync = $null
+    $script:SiteTestPs = $null
+    $script:SiteTestBusy = $false
+    $script:TestBusy = $false
+    $script:SiteTestSnapshot = $null
+    Set-TestUi $false
+    if ($script:PrgSiteTest) {
+        $script:PrgSiteTest.IsIndeterminate = $false
+        $script:PrgSiteTest.Value = 100
+    }
+    $saved = Save-TestReport $text
+    if ($saved) { Add-SiteTestLog "Отчёт сохранён: $saved" '#8B9BB4' }
+
+    $hasBest = (-not $cancelled -and $best -and $bestOk -gt 0)
+    if ($script:BtnSiteTestApplyBest) { $script:BtnSiteTestApplyBest.IsEnabled = $hasBest }
+    $script:SiteTestBestName = if ($hasBest) { $best } else { '' }
+
+    if ($cancelled) {
+        if ($script:LblSiteTestStatus) { $script:LblSiteTestStatus.Text = 'Тест прерван. Возвращаю zapret...' }
+        Restore-ZapretRuntimeSnapshot $snap
+        if ($script:LblSiteTestStatus) { $script:LblSiteTestStatus.Text = 'Тест прерван' }
+        Refresh-Status
+        Start-LiveHealthCheck -Force
+        return
+    }
+
+    if (-not $hasBest) {
+        if ($script:LblSiteTestStatus) { $script:LblSiteTestStatus.Text = 'Ни одна стратегия не открыла эти сайты' }
+        Restore-ZapretRuntimeSnapshot $snap
+        Refresh-Status
+        Start-LiveHealthCheck -Force
+        return
+    }
+
+    if ($script:LblSiteTestStatus) { $script:LblSiteTestStatus.Text = "Лучшая: $best · открылось $bestOk" }
+    $ask = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'YesNo' -Message "Лучшая стратегия для этих сайтов: $best.`nОткрылось $bestOk.`n`nПоставить её службой zapret? Если нет — вернётся прежняя конфигурация."
+    if ($ask -eq 'Yes') {
+        try {
+            Install-ZapretService -StrategyName $best
+            Add-SiteTestLog "Служба поставлена: $best" '#3DDC97'
+            if ($script:BtnSiteTestApplyBest) { $script:BtnSiteTestApplyBest.IsEnabled = $false }
+        } catch {
+            Add-SiteTestLog "Не удалось поставить службу: $($_.Exception.Message)" '#FF8A8A'
+            Restore-ZapretRuntimeSnapshot $snap
+            $errDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message $_.Exception.Message
+        }
+    } else {
+        Restore-ZapretRuntimeSnapshot $snap
+    }
+    Refresh-Status
+    Start-LiveHealthCheck -Force
 }
 
 function Stop-Watcher {
@@ -2344,14 +2921,19 @@ function Add-CurrentHost {
     $raw = [string]$script:TxtHost.Text
     $info = Get-CurrentListInfo
     if (-not $info) { throw 'Нет пользовательского списка в этой сборке zapret.' }
+    $added = $null
     if ($info.Kind -eq 'ip') {
         Add-IpEntry -Raw $raw -Path $info.Path
+        $added = ConvertTo-HostName $raw
+        if (-not $added) { $added = $raw.Trim() }
     } else {
         Add-HostEntry -Raw $raw -Info $info
+        $added = ConvertTo-HostName $raw
     }
     $script:TxtHost.Clear()
     Refresh-SiteList
     Restart-ZapretIfNeeded
+    return $added
 }
 
 function Add-HostEntry {
@@ -2408,7 +2990,13 @@ function Add-IpEntry {
 function Remove-SelectedEntry {
     $info = Get-CurrentListInfo
     if (-not $info) { return }
-    $selected = @($script:LstSites.SelectedItems)
+    $selected = [System.Collections.Generic.List[string]]::new()
+    if ($script:LstSites -and $script:LstSites.SelectedItems) {
+        foreach ($s in $script:LstSites.SelectedItems) {
+            $v = [string]$s
+            if (-not [string]::IsNullOrWhiteSpace($v)) { $selected.Add($v) }
+        }
+    }
     if ($selected.Count -eq 0) { return }
     $dummy = if ($info.Kind -eq 'ip') { $script:DummyIp } else { $script:DummyHost }
     $current = @(Read-ListEntries -Path $info.Path -Dummy $dummy)
@@ -2681,6 +3269,8 @@ $xaml = @'
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="10"/>
             <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="8"/>
+            <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
           <Border Background="#1E1F22" CornerRadius="8">
             <Grid>
@@ -2689,6 +3279,7 @@ $xaml = @'
             </Grid>
           </Border>
           <Button x:Name="BtnAdd" Grid.Column="2" Content="Добавить сайт" Style="{StaticResource BtnAccent}" Margin="0" Padding="18,9"/>
+          <Button x:Name="BtnSiteTest" Grid.Column="4" Content="Тест сайтов" Style="{StaticResource BtnBlurple}" Margin="0" Padding="18,9" ToolTip="Проверить URL разными стратегиями"/>
         </Grid>
       </Border>
     </Grid>
@@ -3005,6 +3596,7 @@ $xamlSettings = @'
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
               </Grid.RowDefinitions>
               <Button Grid.Row="0" Grid.Column="0" x:Name="BtnRestart" Content="Перезапустить" Style="{StaticResource Btn}"/>
               <Button Grid.Row="0" Grid.Column="1" x:Name="BtnInstallService" Content="В службу" Style="{StaticResource Btn}" Margin="0,0,0,6" ToolTip="Выбранную стратегию поставить службой"/>
@@ -3013,7 +3605,8 @@ $xamlSettings = @'
               <Button Grid.Row="2" Grid.Column="0" x:Name="BtnTestAll" Content="Тест всех" Style="{StaticResource Btn}" ToolTip="Тест всех стратегий"/>
               <Button Grid.Row="2" Grid.Column="1" x:Name="BtnCancelTest" Content="Стоп теста" Style="{StaticResource BtnDanger}" Margin="0,0,0,6" IsEnabled="False" ToolTip="Остановить тест"/>
               <Button Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" x:Name="BtnAutoBest" Content="Автотест лучшей → служба" Style="{StaticResource BtnBlurple}" Margin="0,0,0,6"/>
-              <Button Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" x:Name="BtnOfficialTest" Content="Консольный тест zapret" Style="{StaticResource Btn}" Margin="0,0,0,0"/>
+              <Button Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" x:Name="BtnSiteTestSettings" Content="Тест сайтов" Style="{StaticResource Btn}" Margin="0,0,0,6" ToolTip="Проверить свои URL разными стратегиями"/>
+              <Button Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" x:Name="BtnOfficialTest" Content="Консольный тест zapret" Style="{StaticResource Btn}" Margin="0,0,0,0"/>
             </Grid>
           </StackPanel>
           <StackPanel Grid.Row="1" Margin="0,8,0,0">
@@ -3090,9 +3683,134 @@ $xamlSettings = @'
 </Window>
 '@
 
+$xamlSiteTest = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Тест сайтов"
+        Width="720" Height="640" MinWidth="640" MinHeight="520"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None" ResizeMode="CanResize"
+        AllowsTransparency="False" BorderThickness="0"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        Background="#1E1F22"
+        FontFamily="Segoe UI" FontSize="13"
+        Foreground="#DBDEE1"
+        ShowInTaskbar="True">
+  <Window.Resources>
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="#1E1F22"/>
+      <Setter Property="Foreground" Value="#F2F3F5"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="10,8"/>
+      <Setter Property="CaretBrush" Value="#F2F3F5"/>
+    </Style>
+    <Style TargetType="ProgressBar">
+      <Setter Property="Height" Value="8"/>
+      <Setter Property="Foreground" Value="#5865F2"/>
+      <Setter Property="Background" Value="#1E1F22"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <ControlTemplate x:Key="BtnTpl" TargetType="Button">
+      <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Border>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter TargetName="bd" Property="Opacity" Value="0.88"/>
+        </Trigger>
+        <Trigger Property="IsPressed" Value="True">
+          <Setter TargetName="bd" Property="Opacity" Value="0.76"/>
+        </Trigger>
+        <Trigger Property="IsEnabled" Value="False">
+          <Setter TargetName="bd" Property="Opacity" Value="0.4"/>
+        </Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <ControlTemplate x:Key="BtnTplSquare" TargetType="Button">
+      <Grid x:Name="root" Background="{TemplateBinding Background}" SnapsToDevicePixels="True">
+        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Grid>
+    </ControlTemplate>
+    <Style x:Key="Btn" TargetType="Button">
+      <Setter Property="Foreground" Value="#DBDEE1"/>
+      <Setter Property="Background" Value="#4E5058"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="12,9"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Template" Value="{StaticResource BtnTpl}"/>
+    </Style>
+    <Style x:Key="BtnAccent" TargetType="Button" BasedOn="{StaticResource Btn}">
+      <Setter Property="Background" Value="#248046"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+    </Style>
+    <Style x:Key="BtnBlurple" TargetType="Button" BasedOn="{StaticResource Btn}">
+      <Setter Property="Background" Value="#5865F2"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+    </Style>
+    <Style x:Key="BtnDanger" TargetType="Button" BasedOn="{StaticResource Btn}">
+      <Setter Property="Background" Value="#DA373C"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+    </Style>
+  </Window.Resources>
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="34"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+    <Border Grid.Row="0" Background="#202225" Padding="0" SnapsToDevicePixels="True">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="46"/>
+          <ColumnDefinition Width="46"/>
+        </Grid.ColumnDefinitions>
+        <Border x:Name="DragSiteTest" Background="Transparent" Padding="12,0">
+          <TextBlock Text="ТЕСТ САЙТОВ" Foreground="#DCDDDE" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+        </Border>
+        <Button Grid.Column="1" x:Name="BtnMinimizeSiteTest" Content="—" Style="{StaticResource Btn}" Width="Auto" Height="34" Margin="0" Padding="0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#202225" FontSize="16"/>
+        <Button Grid.Column="2" x:Name="BtnCloseSiteTest" Content="×" Style="{StaticResource Btn}" Template="{StaticResource BtnTplSquare}" Width="Auto" Height="34" Margin="0" Padding="0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#B83A3A" Foreground="White" FontSize="17"/>
+      </Grid>
+    </Border>
+    <Grid Grid.Row="1" Margin="16">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="120"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
+      <TextBlock TextWrapping="Wrap" Foreground="#B5BAC1" Margin="0,0,0,10"
+                 Text="Введите URL или домены — по одному в строке. Программа прогонит все стратегии и покажет, на какой сайт открывается. Домены попадут в list-general-user.txt, иначе обход их не увидит."/>
+      <Border Grid.Row="1" Background="#2B2D31" CornerRadius="8" Padding="8">
+        <Grid>
+          <TextBlock x:Name="TxtSiteUrlsHint" Text="instagram.com&#x0a;https://x.com" Foreground="#6D6F78" Margin="10,8,0,0" IsHitTestVisible="False"/>
+          <TextBox x:Name="TxtSiteUrls" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                   Background="Transparent" VerticalContentAlignment="Top"/>
+        </Grid>
+      </Border>
+      <TextBlock x:Name="LblSiteTestStatus" Grid.Row="2" Text="Введите сайты и нажмите «Начать тест»" Foreground="#DCDDDE" Margin="0,10,0,6"/>
+      <ProgressBar x:Name="PrgSiteTest" Grid.Row="3" Minimum="0" Maximum="100" Value="0" Margin="0,0,0,10"/>
+      <Border Grid.Row="4" Background="#2B2D31" CornerRadius="8" Padding="8" Margin="0,0,0,12">
+        <RichTextBox x:Name="SiteTestLog" IsReadOnly="True" VerticalScrollBarVisibility="Auto"
+                     Background="Transparent" Foreground="#DCDDDE" BorderThickness="0" FontFamily="Consolas" FontSize="12"
+                     AcceptsReturn="True"/>
+      </Border>
+      <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right">
+        <Button x:Name="BtnSiteTestApplyBest" Content="Поставить лучшую службой" Style="{StaticResource BtnAccent}" Margin="0,0,8,0" Padding="14,8" IsEnabled="False"/>
+        <Button x:Name="BtnSiteTestStop" Content="Стоп" Style="{StaticResource BtnDanger}" Margin="0,0,8,0" Padding="14,8" IsEnabled="False"/>
+        <Button x:Name="BtnSiteTestStart" Content="Начать тест" Style="{StaticResource BtnBlurple}" Margin="0" Padding="16,8"/>
+      </StackPanel>
+    </Grid>
+  </Grid>
+</Window>
+'@
+
 try {
     $window = [ZapretUiHost]::LoadMain($xaml)
     $script:SettingsWindow = [ZapretUiHost]::LoadSettings($xamlSettings)
+    $script:SiteTestWindow = [ZapretUiHost]::LoadSiteTest($xamlSiteTest)
 } catch {
     $buildDlg = Show-ZapretDialog -Title 'ZAPRET GUI' -Buttons 'OK' -Message "Не удалось построить окно:`n$($_.Exception.Message)"
     exit 1
@@ -3109,16 +3827,21 @@ Bind-GuiNames $window @(
     'DragMain','BtnMinimizeMain','BtnCloseMain',
     'BtnSettings','BtnStart','BtnStop','DotStatus','LblStatus','LblGuiVersion','LblZapretVer','PnlUpdate','LblUpdate','BtnRelease',
     'ImgSettingsGear','TxtSettingsGearFallback',
-    'CardDiscord','CardYoutube','PnlDiscord','PnlYoutube','LblDiscordSummary','LblYoutubeSummary','TxtHost','TxtHostHint','BtnAdd',
+    'CardDiscord','CardYoutube','PnlDiscord','PnlYoutube','LblDiscordSummary','LblYoutubeSummary','TxtHost','TxtHostHint','BtnAdd','BtnSiteTest',
     'PnlOverlay','LblOverlayTitle','LblOverlaySub','PrgOverlay','LblOverlayPct','BtnOverlayRetry'
 )
 Bind-GuiNames $script:SettingsWindow @(
     'DragSettings','BtnMinimizeSettings','BtnCloseSettings',
     'TxtPath','BtnBrowse','BtnScan','CmbStrategy','BtnRestart','BtnInstallService','BtnRemoveService',
-    'BtnAutoBest','BtnTestCurrent','BtnTestAll','BtnCancelTest','BtnOfficialTest','LblStrategies','LblMode',
+    'BtnAutoBest','BtnTestCurrent','BtnTestAll','BtnCancelTest','BtnSiteTestSettings','BtnOfficialTest','LblStrategies','LblMode',
     'TxtHealthInterval',
     'CmbList','ChkRestart','LblListHint','TxtCheckHost','LstSites','BtnCheckSite','BtnRemove','BtnFolder','LblCount',
     'BtnLatestReport','BtnCopyLog','BtnClearLog','LogBox'
+)
+Bind-GuiNames $script:SiteTestWindow @(
+    'DragSiteTest','BtnMinimizeSiteTest','BtnCloseSiteTest',
+    'TxtSiteUrls','TxtSiteUrlsHint','LblSiteTestStatus','PrgSiteTest','SiteTestLog',
+    'BtnSiteTestStart','BtnSiteTestStop','BtnSiteTestApplyBest'
 )
 $window.Title = "ZAPRET  $($script:GuiVersion)"
 if ($script:SettingsWindow) { $script:SettingsWindow.Title = "Настройки · GUI $($script:GuiVersion)" }
@@ -3157,12 +3880,14 @@ try {
         }
         if ($window) { $window.Icon = $settingsIcon }
         if ($script:SettingsWindow) { $script:SettingsWindow.Icon = $settingsIcon }
+        if ($script:SiteTestWindow) { $script:SiteTestWindow.Icon = $settingsIcon }
     }
 } catch {
     Add-Log "Значок настроек не загружен: $($_.Exception.Message)" '#E8C36A'
 }
 Initialize-TrayIcon
 $script:AllowSettingsClose = $false
+$script:AllowSiteTestClose = $false
 $script:SettingsWindow.Add_Closing({
     param($s, $e)
     if (-not $script:AllowSettingsClose) {
@@ -3170,6 +3895,16 @@ $script:SettingsWindow.Add_Closing({
         try { $hiddenSettings = [ZapretUiHost]::HideSettings() } catch { }
     }
 })
+if ($script:SiteTestWindow) {
+    $script:SiteTestWindow.Add_Closing({
+        param($s, $e)
+        if (-not $script:AllowSiteTestClose) {
+            $e.Cancel = $true
+            try { $hiddenSite = [ZapretUiHost]::HideSiteTest() } catch { }
+        }
+    })
+}
+if ($script:SiteTestLog) { $script:SiteTestLog.Document = [Windows.Documents.FlowDocument]::new() }
 
 if ($script:LstSites) { $script:LstSites.SelectionMode = 'Extended' }
 if ($script:LogBox) { $script:LogBox.Document = New-Object Windows.Documents.FlowDocument }
@@ -3223,6 +3958,17 @@ if ($script:BtnMinimizeSettings) {
 if ($script:BtnCloseSettings) {
     $script:BtnCloseSettings.Add_Click({ $windowAction = [ZapretUiHost]::CloseSettings() })
 }
+if ($script:DragSiteTest) {
+    $script:DragSiteTest.Add_MouseLeftButtonDown({
+        $windowAction = [ZapretUiHost]::DragSiteTest()
+    })
+}
+if ($script:BtnMinimizeSiteTest) {
+    $script:BtnMinimizeSiteTest.Add_Click({ $windowAction = [ZapretUiHost]::MinimizeSiteTest() })
+}
+if ($script:BtnCloseSiteTest) {
+    $script:BtnCloseSiteTest.Add_Click({ $windowAction = [ZapretUiHost]::HideSiteTest() })
+}
 if ($script:BtnSettings) {
     $script:BtnSettings.Add_Click({ Show-SettingsWindow })
 }
@@ -3270,15 +4016,58 @@ if ($script:TxtHealthInterval) {
     })
 }
 $script:BtnAdd.Add_Click({
-    try { Add-CurrentHost } catch {
+    try {
+        $added = Add-CurrentHost
+        if ($added) { Show-SiteTestWindow -Seed @($added) }
+    } catch {
         Add-Log $_.Exception.Message '#FF8A8A'
         $warnDlg = Show-ZapretDialog -Title 'ZAPRET GUI' -Buttons 'OK' -Message $_.Exception.Message
     }
 })
+if ($script:BtnSiteTest) {
+    $script:BtnSiteTest.Add_Click({
+        try { Show-SiteTestWindow } catch {
+            Add-Log $_.Exception.Message '#FF8A8A'
+            $warnDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message $_.Exception.Message
+        }
+    })
+}
+if ($script:BtnSiteTestSettings) {
+    $script:BtnSiteTestSettings.Add_Click({ Show-SiteTestWindow })
+}
+if ($script:BtnSiteTestStart) {
+    $script:BtnSiteTestStart.Add_Click({ Start-SiteStrategyTests })
+}
+if ($script:BtnSiteTestStop) {
+    $script:BtnSiteTestStop.Add_Click({
+        if ($script:SiteTestSync) { $script:SiteTestSync.Cancel = $true }
+        Add-SiteTestLog 'Остановка теста сайтов...' '#E8C36A'
+    })
+}
+if ($script:BtnSiteTestApplyBest) {
+    $script:BtnSiteTestApplyBest.Add_Click({
+        $name = [string]$script:SiteTestBestName
+        if (-not $name) { return }
+        try {
+            Install-ZapretService -StrategyName $name
+            Add-SiteTestLog "Служба поставлена: $name" '#3DDC97'
+            $script:BtnSiteTestApplyBest.IsEnabled = $false
+        } catch {
+            Add-SiteTestLog $_.Exception.Message '#FF8A8A'
+            $warnDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message $_.Exception.Message
+        }
+    })
+}
+if ($script:TxtSiteUrls) {
+    $script:TxtSiteUrls.Add_TextChanged({ Update-SiteTestHint })
+}
 $script:TxtHost.Add_KeyDown({
     param($s, $e)
     if ($e.Key -eq 'Return') {
-        try { Add-CurrentHost } catch {
+        try {
+            $added = Add-CurrentHost
+            if ($added) { Show-SiteTestWindow -Seed @($added) }
+        } catch {
             Add-Log $_.Exception.Message '#FF8A8A'
             $warnDlg = Show-ZapretDialog -Title 'ZAPRET GUI' -Buttons 'OK' -Message $_.Exception.Message
         }
@@ -3375,6 +4164,7 @@ $script:BtnInstallService.Add_Click({
 })
 $script:BtnCancelTest.Add_Click({
     if ($script:TestSync) { $script:TestSync.Cancel = $true }
+    if ($script:SiteTestSync) { $script:SiteTestSync.Cancel = $true }
     $script:TestCancel = $true
     Add-Log 'Остановка теста...' '#E8C36A'
 })
@@ -3436,6 +4226,7 @@ if ($script:BtnOverlayRetry) {
 $window.Add_Loaded({
     try {
         try { $attachedSettings = [ZapretUiHost]::AttachSettingsOwner() } catch { }
+        try { $attachedSite = [ZapretUiHost]::AttachSiteTestOwner() } catch { }
         if ($script:TxtHost) { $script:TxtHost.Focus() }
         Add-Log 'Ищу zapret рядом с программой...' '#B5BAC1'
         Register-GuiWindowsAutostart
@@ -3490,7 +4281,7 @@ $window.Add_Closing({
         Hide-MainToTray
         return
     }
-    if ($script:TestBusy) {
+    if ($script:TestBusy -or $script:SiteTestBusy) {
         $answer = Show-ZapretDialog -Title 'ZAPRET GUI' -Buttons 'YesNo' -Message "Сейчас выполняется тест стратегий.`nЗавершить тест и закрыть программу?"
         if ($answer -ne 'Yes') {
             $e.Cancel = $true
@@ -3498,16 +4289,23 @@ $window.Add_Closing({
             return
         }
         if ($script:TestSync) { $script:TestSync.Cancel = $true }
+        if ($script:SiteTestSync) { $script:SiteTestSync.Cancel = $true }
         Add-Log 'Тест остановлен при закрытии программы' '#E8C36A'
     } elseif ($script:TestSync) {
         $script:TestSync.Cancel = $true
+    } elseif ($script:SiteTestSync) {
+        $script:SiteTestSync.Cancel = $true
     }
     Save-SettingsSafe
     Stop-Watcher
     Dispose-TrayIcon
     $script:AllowSettingsClose = $true
+    $script:AllowSiteTestClose = $true
     if ($script:SettingsWindow) {
         try { $closedSettings = [ZapretUiHost]::CloseSettings() } catch { }
+    }
+    if ($script:SiteTestWindow) {
+        try { $closedSite = [ZapretUiHost]::CloseSiteTest() } catch { }
     }
 })
 
@@ -3516,12 +4314,15 @@ $uiTimer.Interval = [TimeSpan]::FromMilliseconds(250)
 $uiTimer.Add_Tick({
     try {
         Flush-LogQueue
+        Flush-SiteTestLogQueue
         Update-BusyOverlayFromState
+        Update-SiteTestProgress
         Complete-ZapretAutoSetup
         Complete-StrategyTests
+        Complete-SiteStrategyTests
         Complete-GithubCheck
         Complete-LiveHealthCheck
-        if (-not $script:Restarting -and -not $script:TestBusy) { Refresh-Status }
+        if (-not $script:Restarting -and -not $script:TestBusy -and -not $script:SiteTestBusy) { Refresh-Status }
         $now = Get-Date
         if ($now -ge $script:NextHealthCheckAt) {
             $script:NextHealthCheckAt = $now.AddMinutes($script:HealthIntervalMinutes)

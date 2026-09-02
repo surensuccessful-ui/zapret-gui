@@ -19,6 +19,8 @@ description: >-
 ## Version / download
 
 - **Versions:** wrapper version is `VERSION` in the project root (shown as GUI x.y.z). Zapret package version comes from `LOCAL_VERSION` in `service.bat`. Running state is scanned from service `zapret` and process `winws` (path matched to the connected folder).
+- When GUI behavior changes: bump `VERSION`, add an entry to `CHANGELOG.md`, and create an annotated git tag `vX.Y.Z` on that commit. Do not move or delete existing tags (`v1.0.20` is the first public snapshot).
+- Restore a snapshot: `git checkout vX.Y.Z`. GitHub also serves `.../archive/refs/tags/vX.Y.Z.zip`.
 - Releases API for the zip. Overlay shows download progress. Remember path in `zapret-gui.settings.json`.
 
 ## Service
