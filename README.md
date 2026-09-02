@@ -5,6 +5,8 @@
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?logo=windows&logoColor=white)](https://github.com/surensuccessful-ui/zapret-gui/releases/latest)
 [![Release](https://img.shields.io/github/v/release/surensuccessful-ui/zapret-gui?label=release)](https://github.com/surensuccessful-ui/zapret-gui/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Dr.Web](https://img.shields.io/badge/Dr.Web-clean_v1.0.20-83d400)](https://online620.drweb.com/cache/?i=c64a838b7e8e177de6f4f68301d567cf)
+[![VirusTotal](https://img.shields.io/badge/VirusTotal-SHA256-394EFF?logo=virustotal&logoColor=white)](https://www.virustotal.com/gui/file/a8046c2ef24cc9b91bec7d1df2425d70872f7376bb31432f00ac4d8a2bc65e09)
 [![Made with Cursor](https://img.shields.io/badge/Made%20with-Cursor-000000?logo=cursor&logoColor=white)](https://cursor.com)
 
 **Форк оригинального [zapret](https://github.com/bol-van/zapret)** с графической оболочкой для Windows. Движок — сборка [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube).
@@ -48,6 +50,28 @@
 3. Если Windows покажет SmartScreen: **Подробнее → Выполнить в любом случае**.
 
 Папку zapret программа скачает с GitHub или предложит указать самой. Рядом с EXE ничего класть не обязательно.
+
+### Проверка на вирусы
+
+Отчёт относится **только к конкретному файлу с конкретным SHA-256**. Если EXE пересобран хотя бы на один байт, старый отчёт к нему больше не относится.
+
+Проверена оболочка `ZapretGUI.exe` из [релиза v1.0.20](https://github.com/surensuccessful-ui/zapret-gui/releases/tag/v1.0.20), не `winws.exe` и не драйвер WinDivert из папки zapret.
+
+[![Dr.Web](https://img.shields.io/badge/Dr.Web-чисто_v1.0.20-83d400)](https://online620.drweb.com/cache/?i=c64a838b7e8e177de6f4f68301d567cf)
+[![VirusTotal](https://img.shields.io/badge/VirusTotal-отчёт_по_хешу-394EFF?logo=virustotal&logoColor=white)](https://www.virustotal.com/gui/file/a8046c2ef24cc9b91bec7d1df2425d70872f7376bb31432f00ac4d8a2bc65e09)
+
+| Версия | Файл | SHA-256 | Проверки |
+| --- | --- | --- | --- |
+| v1.0.20 | `ZapretGUI.exe` | `a8046c2ef24cc9b91bec7d1df2425d70872f7376bb31432f00ac4d8a2bc65e09` | [Dr.Web — Ok](https://online620.drweb.com/cache/?i=c64a838b7e8e177de6f4f68301d567cf) · [VirusTotal](https://www.virustotal.com/gui/file/a8046c2ef24cc9b91bec7d1df2425d70872f7376bb31432f00ac4d8a2bc65e09) |
+
+Тот же хеш указан в `SHA256SUMS.txt` релиза. Перед запуском сравните скачанный файл:
+
+```powershell
+Get-FileHash .\ZapretGUI.exe -Algorithm SHA256
+```
+
+> [!WARNING]
+> Движок zapret использует WinDivert. Антивирусы часто помечают его как `RiskTool`, `HackTool` или `PUA` — это не вирус, а драйвер перехвата трафика. Имеет смысл смотреть название детекта, а не только число срабатываний. При ложных срабатываниях добавьте папку zapret в исключения. Подробнее: [Flowseal](https://github.com/Flowseal/zapret-discord-youtube?tab=readme-ov-file#%D0%B0%D0%BD%D1%82%D0%B8%D0%B2%D0%B8%D1%80%D1%83%D1%81%D1%8B) и [bol-van/zapret-win-bundle](https://github.com/bol-van/zapret-win-bundle/blob/master/readme.md#%D0%B0%D0%BD%D1%82%D0%B8%D0%B2%D0%B8%D1%80%D1%83%D1%81%D1%8B).
 
 ### Как пользоваться
 
@@ -112,6 +136,28 @@ No installer.
 3. If SmartScreen appears: **More info → Run anyway**.
 
 The program downloads zapret from GitHub or asks you to pick an existing folder.
+
+### Antivirus checks
+
+A scan report applies **only to one file with one SHA-256**. If the EXE is rebuilt, the old report no longer matches.
+
+This is the wrapper `ZapretGUI.exe` from [release v1.0.20](https://github.com/surensuccessful-ui/zapret-gui/releases/tag/v1.0.20), not `winws.exe` or the WinDivert driver from the zapret folder.
+
+[![Dr.Web](https://img.shields.io/badge/Dr.Web-clean_v1.0.20-83d400)](https://online620.drweb.com/cache/?i=c64a838b7e8e177de6f4f68301d567cf)
+[![VirusTotal](https://img.shields.io/badge/VirusTotal-hash_report-394EFF?logo=virustotal&logoColor=white)](https://www.virustotal.com/gui/file/a8046c2ef24cc9b91bec7d1df2425d70872f7376bb31432f00ac4d8a2bc65e09)
+
+| Version | File | SHA-256 | Reports |
+| --- | --- | --- | --- |
+| v1.0.20 | `ZapretGUI.exe` | `a8046c2ef24cc9b91bec7d1df2425d70872f7376bb31432f00ac4d8a2bc65e09` | [Dr.Web — Ok](https://online620.drweb.com/cache/?i=c64a838b7e8e177de6f4f68301d567cf) · [VirusTotal](https://www.virustotal.com/gui/file/a8046c2ef24cc9b91bec7d1df2425d70872f7376bb31432f00ac4d8a2bc65e09) |
+
+The same hash is in the release `SHA256SUMS.txt`. Compare the downloaded file before running it:
+
+```powershell
+Get-FileHash .\ZapretGUI.exe -Algorithm SHA256
+```
+
+> [!WARNING]
+> The zapret engine uses WinDivert. Antivirus tools often flag it as `RiskTool`, `HackTool`, or `PUA`. That is a traffic-interception driver, not a virus. Look at the detection name, not only the hit count. Add the zapret folder to exclusions if needed. See [Flowseal](https://github.com/Flowseal/zapret-discord-youtube?tab=readme-ov-file#%D0%B0%D0%BD%D1%82%D0%B8%D0%B2%D0%B8%D1%80%D1%83%D1%81%D1%8B) and [bol-van/zapret-win-bundle](https://github.com/bol-van/zapret-win-bundle/blob/master/readme.md#%D0%B0%D0%BD%D1%82%D0%B8%D0%B2%D0%B8%D1%80%D1%83%D1%81%D1%8B).
 
 ### How to use
 
