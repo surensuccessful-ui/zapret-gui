@@ -24,6 +24,12 @@
   <img src="docs/screenshots/settings.png" alt="Окно настроек ZAPRET GUI" width="820">
 </p>
 
+### Новое в 1.0.28
+
+- Опрос своих сайтов и серверов: список задаётся в настройках, на главном окне появляется третья колонка. Если адресов нет — видны только Discord и YouTube
+- Настройки оболочки хранятся в `%APPDATA%\ZapretGUI`, а не рядом с программой, поэтому при обновлении прежняя конфигурация остаётся
+- Жучок под «О программе»: можно отправить баг-репорт через GitHub Issues, лог копируется в буфер обмена
+
 ---
 
 ## Русский
@@ -135,6 +141,12 @@ Built with [Cursor](https://cursor.com). Python is not required.
 The GUI connects a zapret folder, installs the chosen strategy as a Windows service, and checks Discord and YouTube. It does not patch official strategy files.
 
 By default the app **registers itself in Windows Startup**. The close button **hides the window to the tray**; bypass keeps running.
+
+### What's new in 1.0.28
+
+- Poll your own sites and servers: the list is in Settings, and a third column appears on the main window. If the list is empty, only Discord and YouTube are shown
+- Wrapper settings live in `%APPDATA%\ZapretGUI`, not next to the EXE, so they survive updates
+- Beetle button under About: send a bug report via GitHub Issues; the log is copied to the clipboard
 
 ### Features
 
