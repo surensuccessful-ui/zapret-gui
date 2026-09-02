@@ -18,10 +18,10 @@
 **[Скачать ZapretGUI.exe](https://github.com/surensuccessful-ui/zapret-gui/releases/latest)** · [версии проекта](CHANGELOG.md)
 
 <p>
-  <img src="docs/screenshots/main.png" alt="Главное окно ZAPRET GUI" width="820">
+  <img src="docs/screenshots/main-1.0.28.png" alt="Главное окно ZAPRET GUI" width="820">
 </p>
 <p>
-  <img src="docs/screenshots/settings.png" alt="Окно настроек ZAPRET GUI" width="820">
+  <img src="docs/screenshots/settings-1.0.28.png" alt="Окно настроек ZAPRET GUI" width="820">
 </p>
 
 ### Новое в 1.0.28
