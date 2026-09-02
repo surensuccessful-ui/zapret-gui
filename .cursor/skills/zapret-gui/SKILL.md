@@ -13,7 +13,7 @@ description: >-
 - **Wrapper only.** Do not patch `general*.bat` / `service.bat` in the zapret folder; GitHub updates replace them.
 - **User lists:** `lists\list-general-user.txt` (and other `*user*.txt`). The GUI discovers them; strategies already wire `list-general-user`.
 - **Live Discord/YouTube:** hosts from `utils\targets.txt` (`DiscordMain`, `DiscordGateway`, … / `YouTubeWeb`, …). Fallback URLs only if the file is missing.
-- **Two windows:** main = status, start/stop, live checks, add-site. Settings = path, strategies, service, tests, lists, log. About is a small dialog from the left-rail **i** button.
+- **Two windows:** main = status, start/stop, live checks, add-site. Settings = path, strategies, service, tests, lists, log. About is a small dialog from the left-rail **i** button (it also checks GitHub for a newer wrapper). After a GUI self-update, rewrite Windows Startup to the new EXE path.
 - **Window host:** `[ZapretUiHost]::StartMainLoop()` / `ShowSettings()`. Read the PowerShell WPF skill before touching window lifetime.
 
 ## Version / download

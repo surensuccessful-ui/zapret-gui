@@ -143,6 +143,8 @@ public static class ZapretUiHost {
     static Window _main;
     static Window _settings;
     static Window _siteTest;
+    static TextBlock _aboutStatus;
+    static Button _aboutUpdate;
     static string _dialogResult = "Cancel";
 
     static object Ok() { return true; }
@@ -270,7 +272,25 @@ public static class ZapretUiHost {
         return _dialogResult;
     }
 
-    public static object ShowAbout(string version, string released, string developer) {
+    public static object SetAboutUpdate(string status, bool canUpdate) {
+        if (_aboutStatus == null) return false;
+        _aboutStatus.Text = status == null ? "" : status;
+        if (canUpdate) {
+            _aboutStatus.Foreground = HexBrush("#E8C36A");
+        } else if (status != null && status.IndexOf("Не удалось") >= 0) {
+            _aboutStatus.Foreground = HexBrush("#F23F42");
+        } else if (status != null && status.IndexOf("Проверяю") >= 0) {
+            _aboutStatus.Foreground = HexBrush("#E8C36A");
+        } else {
+            _aboutStatus.Foreground = HexBrush("#3DDC97");
+        }
+        if (_aboutUpdate != null) {
+            _aboutUpdate.Visibility = canUpdate ? Visibility.Visible : Visibility.Collapsed;
+        }
+        return true;
+    }
+
+    public static object ShowAbout(string version, string released, string developer, string status, bool canUpdate) {
         _dialogResult = "OK";
         if (Application.Current == null) {
             Application app = new Application();
@@ -305,7 +325,7 @@ public static class ZapretUiHost {
         bodyBlock.TextWrapping = TextWrapping.Wrap;
         bodyBlock.FontSize = 14;
         bodyBlock.Foreground = HexBrush("#B5BAC1");
-        bodyBlock.Margin = new Thickness(0, 12, 0, 20);
+        bodyBlock.Margin = new Thickness(0, 12, 0, 8);
         bodyBlock.Text = "Версия: " + (version ?? "") + "\n"
             + "Дата выпуска: " + (released ?? "—") + "\n\n"
             + "Разработчик: " + (developer ?? "") + "\n"
@@ -313,6 +333,14 @@ public static class ZapretUiHost {
             + "Форк оригинального zapret (bol-van).\n"
             + "Движок: Flowseal zapret-discord-youtube.";
         root.Children.Add(bodyBlock);
+
+        _aboutStatus = new TextBlock();
+        _aboutStatus.TextWrapping = TextWrapping.Wrap;
+        _aboutStatus.FontSize = 13;
+        _aboutStatus.Margin = new Thickness(0, 0, 0, 16);
+        _aboutStatus.Text = string.IsNullOrWhiteSpace(status) ? "Проверяю GitHub..." : status;
+        _aboutStatus.Foreground = HexBrush("#E8C36A");
+        root.Children.Add(_aboutStatus);
 
         StackPanel row = new StackPanel();
         row.Orientation = Orientation.Horizontal;
@@ -325,6 +353,9 @@ public static class ZapretUiHost {
             _dialogResult = "OK";
         };
         row.Children.Add(github);
+        _aboutUpdate = MakeAskButton("Обновить", "Update", "#248046", "#FFFFFF", dlg);
+        _aboutUpdate.Visibility = canUpdate ? Visibility.Visible : Visibility.Collapsed;
+        row.Children.Add(_aboutUpdate);
         row.Children.Add(MakeAskButton("Понятно", "OK", "#4E5058", "#DBDEE1", dlg));
         root.Children.Add(row);
         chrome.Child = root;
@@ -345,9 +376,12 @@ public static class ZapretUiHost {
         EventHandler onClosed = null;
         onClosed = delegate(object s, EventArgs e) {
             dlg.Closed -= onClosed;
+            _aboutStatus = null;
+            _aboutUpdate = null;
             frame.Continue = false;
         };
         dlg.Closed += onClosed;
+        SetAboutUpdate(_aboutStatus.Text, canUpdate);
         dlg.Show();
         dlg.Activate();
         Dispatcher.PushFrame(frame);
@@ -588,6 +622,12 @@ $script:NextGithubCheckAt = [datetime]::MinValue
 $script:NextGuiUpdateCheckAt = [datetime]::MaxValue
 $script:GuiApplyRestart = $false
 $script:MainUiReady = $false
+$script:GuiUpdateCheckFromAbout = $false
+$script:GuiAboutStatusText = ''
+$script:GuiAboutCanUpdate = $false
+$script:GuiPendingRemote = ''
+$script:GuiPendingDownloadUrl = ''
+$script:GuiPendingSumsUrl = ''
 $script:TrayIcon = $null
 $script:LogQueue = [System.Collections.Concurrent.ConcurrentQueue[object]]::new()
 $script:BrushConv = [Windows.Media.BrushConverter]::new()
@@ -607,6 +647,7 @@ function Show-ZapretDialog {
 }
 
 function Get-GuiVersion {
+    if ($script:IsPackaged) { return '1.0.0' }
     $candidates = @(
         (Join-Path $script:AppDir 'VERSION')
         (Join-Path $script:AppDir 'zapret-gui.version')
@@ -622,6 +663,7 @@ function Get-GuiVersion {
 $script:GuiVersion = Get-GuiVersion
 
 function Get-GuiReleaseDate {
+    if ($script:IsPackaged) { return '1970-01-01' }
     $candidates = @(
         (Join-Path $script:AppDir 'RELEASE_DATE')
         (Join-Path $script:AppDir 'zapret-gui.release-date')
@@ -1108,11 +1150,28 @@ function Test-GuiDownloadUri {
 
 function Show-AboutWindow {
     $released = Format-GuiReleaseDate $script:GuiReleaseDate
-    $about = [ZapretUiHost]::ShowAbout([string]$script:GuiVersion, [string]$released, [string]$script:GuiDeveloperName)
+    $script:GuiUpdateCheckFromAbout = $true
+    $script:GuiAboutStatusText = 'Проверяю GitHub...'
+    $script:GuiAboutCanUpdate = $false
+    Complete-GuiUpdateCheck
+    Start-GuiUpdateCheck -Force
+    Complete-GuiUpdateCheck
+    $status = if ([string]::IsNullOrWhiteSpace($script:GuiAboutStatusText)) { 'Проверяю GitHub...' } else { [string]$script:GuiAboutStatusText }
+    $about = [ZapretUiHost]::ShowAbout(
+        [string]$script:GuiVersion,
+        [string]$released,
+        [string]$script:GuiDeveloperName,
+        [string]$status,
+        [bool]$script:GuiAboutCanUpdate
+    )
+    if ($about -eq 'Update' -and (Test-GuiDownloadUri ([string]$script:GuiPendingDownloadUrl))) {
+        Start-GuiSelfUpdate -Version ([string]$script:GuiPendingRemote) -Url ([string]$script:GuiPendingDownloadUrl) -SumsUrl ([string]$script:GuiPendingSumsUrl)
+    }
 }
 
 function Start-GuiUpdateCheck {
-    if ($script:ShowUpdatedNotice) { return }
+    param([switch]$Force)
+    if ($script:ShowUpdatedNotice -and -not $Force) { return }
     if ($script:GuiUpdateCheckSync -and -not $script:GuiUpdateCheckSync.Done) { return }
     if ($script:GuiUpdateSync -and -not $script:GuiUpdateSync.Done) { return }
     $sync = [hashtable]::Synchronized(@{ Done = $false; Version = ''; Error = ''; DownloadUrl = ''; SumsUrl = ''; Published = '' })
@@ -1165,21 +1224,55 @@ function Complete-GuiUpdateCheck {
     $script:LastGuiUpdateCheck = (Get-Date).ToString('yyyy-MM-dd')
     $script:NextGuiUpdateCheckAt = (Get-Date).Date.AddDays(1)
     Save-SettingsSafe
+    $local = ConvertTo-GuiVersionText ([string]$script:GuiVersion)
+    $remote = ConvertTo-GuiVersionText ([string]$sync.Version)
+    $url = [string]$sync.DownloadUrl
+    $script:GuiPendingRemote = $remote
+    $script:GuiPendingDownloadUrl = $url
+    $script:GuiPendingSumsUrl = [string]$sync.SumsUrl
+    if ($script:GuiUpdateCheckFromAbout) {
+        $script:GuiUpdateCheckFromAbout = $false
+        if ($sync.Error) {
+            $script:GuiAboutStatusText = "Не удалось проверить: $($sync.Error)"
+            $script:GuiAboutCanUpdate = $false
+            $script:NextGuiUpdateCheckAt = (Get-Date).AddHours(6)
+            $aboutStatus = [ZapretUiHost]::SetAboutUpdate([string]$script:GuiAboutStatusText, $false)
+            return
+        }
+        if ([string]::IsNullOrWhiteSpace($remote)) {
+            $script:GuiAboutStatusText = 'На GitHub нет сведений о версии.'
+            $script:GuiAboutCanUpdate = $false
+            $aboutStatus = [ZapretUiHost]::SetAboutUpdate([string]$script:GuiAboutStatusText, $false)
+            return
+        }
+        if ((Compare-ZapretVersion $remote $local) -le 0) {
+            $script:GuiAboutStatusText = "Установлена актуальная версия $local."
+            $script:GuiAboutCanUpdate = $false
+            $aboutStatus = [ZapretUiHost]::SetAboutUpdate([string]$script:GuiAboutStatusText, $false)
+            return
+        }
+        $can = [bool](Test-GuiDownloadUri $url)
+        $script:GuiAboutCanUpdate = $can
+        $script:GuiAboutStatusText = if ($can) {
+            "На GitHub есть новая версия $remote."
+        } else {
+            "На GitHub есть $remote, но файла ZapretGUI.exe нет."
+        }
+        $aboutStatus = [ZapretUiHost]::SetAboutUpdate([string]$script:GuiAboutStatusText, $can)
+        return
+    }
     if ($sync.Error) {
         Add-Log "Проверка обновления GUI: $($sync.Error)" '#8B9BB4'
         $script:NextGuiUpdateCheckAt = (Get-Date).AddHours(6)
         return
     }
-    $remote = ConvertTo-GuiVersionText ([string]$sync.Version)
     if ([string]::IsNullOrWhiteSpace($remote)) { return }
-    $local = ConvertTo-GuiVersionText ([string]$script:GuiVersion)
     if ((Compare-ZapretVersion $remote $local) -le 0) { return }
     if ($script:DeclinedGuiVersion -eq $remote) { return }
     if ($script:TestBusy -or $script:SiteTestBusy -or ($script:SetupSync -and -not $script:SetupSync.Done) -or ($script:GuiUpdateSync -and -not $script:GuiUpdateSync.Done)) {
         $script:NextGuiUpdateCheckAt = (Get-Date).AddMinutes(15)
         return
     }
-    $url = [string]$sync.DownloadUrl
     if (-not (Test-GuiDownloadUri $url)) {
         Add-Log 'Релиз GUI на GitHub есть, но файла ZapretGUI.exe в нём нет.' '#E8C36A'
         return
@@ -1327,12 +1420,25 @@ function Complete-GuiSelfUpdate {
     }
 }
 
+function Get-GuiUpdateTargetPath {
+    param([string]$Version)
+    $dir = [string]$script:AppDir
+    if (-not $script:IsPackaged) {
+        return Join-Path $dir 'ZapretGUI.exe'
+    }
+    $ownName = [IO.Path]::GetFileName([string]$script:OwnPath)
+    $ver = ConvertTo-GuiVersionText $Version
+    if ($ownName -match '^ZapretGUI-\d' -and $ver -match '^\d+(\.\d+)+$') {
+        return Join-Path $dir ("ZapretGUI-$ver-win10-win11.exe")
+    }
+    if ($script:OwnPath) { return [string]$script:OwnPath }
+    return Join-Path $dir 'ZapretGUI.exe'
+}
+
 function Apply-GuiUpdate {
     param([string]$SourcePath, [string]$Version)
-    $target = [string]$script:OwnPath
-    if (-not $script:IsPackaged) {
-        $target = Join-Path $script:AppDir 'ZapretGUI.exe'
-    }
+    $oldPath = [string]$script:OwnPath
+    $target = Get-GuiUpdateTargetPath -Version $Version
     if ([string]::IsNullOrWhiteSpace($target)) { throw 'Не удалось определить путь программы для замены.' }
     $updaterDir = Join-Path $env:TEMP ('zapret-gui-apply-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Path $updaterDir -Force | Out-Null
@@ -1341,8 +1447,11 @@ function Apply-GuiUpdate {
 param(
     [string]$TargetPath,
     [string]$SourcePath,
+    [string]$OldPath,
     [int]$WaitPid,
-    [string]$Version
+    [string]$Version,
+    [string]$RunName,
+    [string]$TaskName
 )
 $ErrorActionPreference = 'Continue'
 $deadline = (Get-Date).AddSeconds(90)
@@ -1364,6 +1473,26 @@ foreach ($i in 1..30) {
 }
 if (-not $copied) { exit 1 }
 try { Remove-Item -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue } catch { }
+$canonical = Join-Path ([IO.Path]::GetDirectoryName($TargetPath)) 'ZapretGUI.exe'
+if ($canonical -and ($canonical -ne $TargetPath) -and (Test-Path -LiteralPath $canonical)) {
+    try { Copy-Item -LiteralPath $TargetPath -Destination $canonical -Force } catch { }
+}
+$runCmd = '"{0}" -tray' -f $TargetPath
+try {
+    $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    if (Test-Path -LiteralPath $runKey) {
+        Set-ItemProperty -Path $runKey -Name $RunName -Value $runCmd -Type String
+    }
+} catch { }
+if ($TaskName) {
+    try {
+        $sch = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+        $p = Start-Process -FilePath $sch -ArgumentList @('/Change', '/TN', $TaskName, '/TR', $runCmd) -Wait -PassThru -WindowStyle Hidden
+    } catch { }
+}
+if ($OldPath -and ($OldPath -ne $TargetPath) -and (Test-Path -LiteralPath $OldPath)) {
+    try { Remove-Item -LiteralPath $OldPath -Force -ErrorAction SilentlyContinue } catch { }
+}
 $psi = New-Object Diagnostics.ProcessStartInfo
 $psi.FileName = $TargetPath
 $psi.Arguments = '-updated'
@@ -1384,7 +1513,10 @@ exit 0
     $quotedUpdater = '"' + ($updaterPath -replace '"', '\"') + '"'
     $quotedTarget = '"' + ($target -replace '"', '\"') + '"'
     $quotedSource = '"' + ($SourcePath -replace '"', '\"') + '"'
-    $startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $quotedUpdater -TargetPath $quotedTarget -SourcePath $quotedSource -WaitPid $PID -Version `"$Version`""
+    $quotedOld = '"' + ($oldPath -replace '"', '\"') + '"'
+    $quotedRun = '"' + ($script:GuiAutostartRunName -replace '"', '\"') + '"'
+    $quotedTask = '"' + ($script:GuiAutostartTaskName -replace '"', '\"') + '"'
+    $startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $quotedUpdater -TargetPath $quotedTarget -SourcePath $quotedSource -OldPath $quotedOld -WaitPid $PID -Version `"$Version`" -RunName $quotedRun -TaskName $quotedTask"
     $updaterProc = [Diagnostics.Process]::Start($startInfo)
     if (-not $updaterProc) { throw 'Не удалось запустить установщик обновления.' }
     $released = [ZapretSingleInstance]::Release()

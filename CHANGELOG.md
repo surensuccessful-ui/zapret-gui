@@ -21,6 +21,11 @@ git checkout main
 
 ---
 
+## 1.0.24
+
+- В окне «О программе» проверяется, есть ли на GitHub более новая оболочка
+- После установки обновления автозапуск Windows переписывается на новый EXE (если имя файла сменилось вместе с версией)
+
 ## 1.0.23
 
 - Кнопка «О программе» под настройками: версия оболочки, дата выпуска, разработчик
@@ -48,6 +53,11 @@ git checkout main
 # English
 
 Tags `vX.Y.Z` snapshot the **whole repo**, not only the packaged EXE. Restore with `git checkout v1.0.20`. The wrapper number in `VERSION` must match the tag.
+
+## 1.0.24
+
+- About window checks GitHub for a newer wrapper
+- After a self-update, Windows Startup is rewritten to the new EXE path
 
 ## 1.0.23
 
