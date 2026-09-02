@@ -130,10 +130,6 @@ Get-FileHash .\ZapretGUI.exe -Algorithm SHA256
 
 ## English
 
-ВСЁ ДЛЯ ТЕБЯЯ, МОРЯ И АКЕАНЫ.
-
-А теперь к делу:
-
 A **fork of original [zapret](https://github.com/bol-van/zapret)** with a Windows GUI. The engine is [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube).
 
 Built with [Cursor](https://cursor.com). Python is not required.
