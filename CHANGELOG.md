@@ -21,6 +21,10 @@ git checkout main
 
 ---
 
+## 1.0.25
+
+- по моему хотенью
+
 ## 1.0.24
 
 - В окне «О программе» проверяется, есть ли на GitHub более новая оболочка
@@ -53,6 +57,10 @@ git checkout main
 # English
 
 Tags `vX.Y.Z` snapshot the **whole repo**, not only the packaged EXE. Restore with `git checkout v1.0.20`. The wrapper number in `VERSION` must match the tag.
+
+## 1.0.25
+
+- по моему хотенью
 
 ## 1.0.24
 

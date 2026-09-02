@@ -145,6 +145,7 @@ public static class ZapretUiHost {
     static Window _siteTest;
     static TextBlock _aboutStatus;
     static Button _aboutUpdate;
+    static Button _aboutSkip;
     static string _dialogResult = "Cancel";
 
     static object Ok() { return true; }
@@ -230,6 +231,9 @@ public static class ZapretUiHost {
         } else if (mode == "YesNo") {
             row.Children.Add(MakeAskButton("Нет", "No", "#4E5058", "#DBDEE1", dlg));
             row.Children.Add(MakeAskButton("Да", "Yes", "#5865F2", "#FFFFFF", dlg));
+        } else if (mode == "UpdateSkip") {
+            row.Children.Add(MakeAskButton("Пропустить", "Skip", "#4E5058", "#DBDEE1", dlg));
+            row.Children.Add(MakeAskButton("Обновить", "Update", "#248046", "#FFFFFF", dlg));
         } else {
             row.Children.Add(MakeAskButton("Понятно", "OK", "#5865F2", "#FFFFFF", dlg));
         }
@@ -240,6 +244,7 @@ public static class ZapretUiHost {
             if (e.Key == Key.Escape) {
                 _dialogResult = (mode == "OK") ? "OK" : "Cancel";
                 if (mode == "YesNo") _dialogResult = "No";
+                if (mode == "UpdateSkip") _dialogResult = "Skip";
                 dlg.Close();
             }
         };
@@ -286,6 +291,9 @@ public static class ZapretUiHost {
         }
         if (_aboutUpdate != null) {
             _aboutUpdate.Visibility = canUpdate ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (_aboutSkip != null) {
+            _aboutSkip.Visibility = canUpdate ? Visibility.Visible : Visibility.Collapsed;
         }
         return true;
     }
@@ -353,6 +361,9 @@ public static class ZapretUiHost {
             _dialogResult = "OK";
         };
         row.Children.Add(github);
+        _aboutSkip = MakeAskButton("Пропустить", "Skip", "#4E5058", "#DBDEE1", dlg);
+        _aboutSkip.Visibility = canUpdate ? Visibility.Visible : Visibility.Collapsed;
+        row.Children.Add(_aboutSkip);
         _aboutUpdate = MakeAskButton("Обновить", "Update", "#248046", "#FFFFFF", dlg);
         _aboutUpdate.Visibility = canUpdate ? Visibility.Visible : Visibility.Collapsed;
         row.Children.Add(_aboutUpdate);
@@ -378,6 +389,7 @@ public static class ZapretUiHost {
             dlg.Closed -= onClosed;
             _aboutStatus = null;
             _aboutUpdate = null;
+            _aboutSkip = null;
             frame.Continue = false;
         };
         dlg.Closed += onClosed;
@@ -1131,6 +1143,23 @@ function ConvertTo-GuiVersionText {
     return ($Text.Trim() -replace '^v', '')
 }
 
+function Test-GuiUpdateIsSuppressed {
+    param([string]$Remote)
+    $skipped = ConvertTo-GuiVersionText ([string]$script:DeclinedGuiVersion)
+    $ver = ConvertTo-GuiVersionText $Remote
+    if ([string]::IsNullOrWhiteSpace($skipped) -or [string]::IsNullOrWhiteSpace($ver)) { return $false }
+    return ((Compare-ZapretVersion $ver $skipped) -le 0)
+}
+
+function Save-SkippedGuiUpdate {
+    param([string]$Remote)
+    $ver = ConvertTo-GuiVersionText $Remote
+    if ([string]::IsNullOrWhiteSpace($ver)) { return }
+    $script:DeclinedGuiVersion = $ver
+    Save-SettingsSafe
+    Add-Log "Обновление GUI $ver пропущено — напомню, когда выйдет версия новее" '#8B9BB4'
+}
+
 function Test-GuiDownloadUri {
     param([string]$Url)
     try {
@@ -1166,6 +1195,8 @@ function Show-AboutWindow {
     )
     if ($about -eq 'Update' -and (Test-GuiDownloadUri ([string]$script:GuiPendingDownloadUrl))) {
         Start-GuiSelfUpdate -Version ([string]$script:GuiPendingRemote) -Url ([string]$script:GuiPendingDownloadUrl) -SumsUrl ([string]$script:GuiPendingSumsUrl)
+    } elseif ($about -eq 'Skip') {
+        Save-SkippedGuiUpdate ([string]$script:GuiPendingRemote)
     }
 }
 
@@ -1267,8 +1298,14 @@ function Complete-GuiUpdateCheck {
         return
     }
     if ([string]::IsNullOrWhiteSpace($remote)) { return }
-    if ((Compare-ZapretVersion $remote $local) -le 0) { return }
-    if ($script:DeclinedGuiVersion -eq $remote) { return }
+    if ((Compare-ZapretVersion $remote $local) -le 0) {
+        Add-Log "Оболочка GUI актуальна ($local, GitHub $remote)" '#8B9BB4'
+        return
+    }
+    if (Test-GuiUpdateIsSuppressed $remote) {
+        Add-Log "Обновление GUI $remote пропущено пользователем, жду версию новее $($script:DeclinedGuiVersion)" '#8B9BB4'
+        return
+    }
     if ($script:TestBusy -or $script:SiteTestBusy -or ($script:SetupSync -and -not $script:SetupSync.Done) -or ($script:GuiUpdateSync -and -not $script:GuiUpdateSync.Done)) {
         $script:NextGuiUpdateCheckAt = (Get-Date).AddMinutes(15)
         return
@@ -1278,11 +1315,9 @@ function Complete-GuiUpdateCheck {
         return
     }
     $shown = [ZapretUiHost]::ShowMain()
-    $answer = Show-ZapretDialog -Title 'Обновление ZAPRET GUI' -Buttons 'YesNo' -Message "Доступна новая версия оболочки $remote (у вас $local).`n`nСкачать и установить обновление? Старая программа закроется, новая откроется сама."
-    if ($answer -ne 'Yes') {
-        $script:DeclinedGuiVersion = $remote
-        Save-SettingsSafe
-        Add-Log "Обновление GUI $remote отложено" '#8B9BB4'
+    $answer = Show-ZapretDialog -Title 'Обновление ZAPRET GUI' -Buttons 'UpdateSkip' -Message "Доступна новая версия оболочки $remote (у вас $local).`n`nОбновить — скачать и заменить программу. Старая закроется, новая откроется сама.`nПропустить — не напоминать, пока не выйдет версия новее $remote."
+    if ($answer -ne 'Update') {
+        Save-SkippedGuiUpdate $remote
         return
     }
     Start-GuiSelfUpdate -Version $remote -Url $url -SumsUrl ([string]$sync.SumsUrl)
@@ -4846,9 +4881,6 @@ $window.Add_Loaded({
         }
         if ($cfg -and $cfg.DeclinedGuiVersion) {
             $script:DeclinedGuiVersion = [string]$cfg.DeclinedGuiVersion
-        }
-        if ($script:LastGuiUpdateCheck -eq (Get-Date).ToString('yyyy-MM-dd')) {
-            $script:NextGuiUpdateCheckAt = (Get-Date).Date.AddDays(1)
         }
         if ($script:ShowUpdatedNotice) {
             $shownUpdated = [ZapretUiHost]::ShowMain()
