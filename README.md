@@ -83,18 +83,6 @@ A saved `ZapretPath` wins over nearby-folder discovery.
 
 `zapret-gui.settings.json` next to the EXE (or `%APPDATA%\ZapretGUI\settings.json`): zapret path, last strategy, last list, restart-after-edit, health interval, first-run flag. Site lists stay in the zapret `lists` folder.
 
-### Build the EXE
-
-On a developer PC, Windows PowerShell 5.1:
-
-```bat
-build-exe.bat
-```
-
-Output: `dist\ZapretGUI-<version>-win10-win11\ZapretGUI.exe`
-
-Do not commit unpacked `zapret-discord-youtube-*` folders or `zapret-gui.settings.json`.
-
 ---
 
 ## Русский
@@ -195,15 +183,3 @@ Do not commit unpacked `zapret-discord-youtube-*` folders or `zapret-gui.setting
 - отметка, что первый запуск уже пройден.
 
 Списки сайтов хранятся в папке zapret: `lists\list-general-user.txt` и другие `*user*.txt`.
-
-### Сборка EXE
-
-На компьютере разработчика:
-
-```bat
-build-exe.bat
-```
-
-Готовый файл: `dist\ZapretGUI-<версия>-win10-win11\ZapretGUI.exe`.
-
-Папки `zapret-discord-youtube-*` и файл `zapret-gui.settings.json` в git не входят.
