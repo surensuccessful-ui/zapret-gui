@@ -1,0 +1,32 @@
+---
+description: PowerShell 5.1 WPF pitfalls that crash this GUI
+globs: "**/*.ps1"
+alwaysApply: false
+---
+
+# PowerShell 5.1 + WPF
+
+Windows PowerShell wraps cmdlet output in `[psobject]`. That wrapper makes .NET overloads throw **«Типы аргумента не совпадают»**.
+
+```powershell
+# BAD — New-Object wraps; @() then throws (PowerShell #27558)
+$list = New-Object System.Collections.Generic.List[object]
+@($list)
+
+# GOOD
+$list = [System.Collections.Generic.List[object]]::new()
+foreach ($item in $list) { }
+```
+
+Never call from PowerShell (ambiguous with WinForms, or PSObject-typed args):
+
+- `$window.ShowDialog()`, `[Windows.Application]::Run($window)`, `[Dispatcher]::PushFrame($frame)`
+- `[DockPanel]::SetDock($el, 'Left')` — use `StackPanel` or set attached properties in C#
+- `[Windows.MessageBox]` / `[Windows.Application]` — always `System.Windows.MessageBox` / `System.Windows.Application`
+
+Do:
+
+- Create WPF objects with `::new()`, not `New-Object`, when they go into typed .NET APIs
+- Show/hide windows via `[ZapretUiHost]::StartMainLoop()`, `ShowSettings()`, `HideSettings()` — do not assign void .NET methods to `$null` / `[void]`
+- Set `Owner` only after the main window is visible (`AttachSettingsOwner`)
+- Wrap `DispatcherTimer` ticks and `Loaded` in `try/catch` so one UI error does not tear down the message loop

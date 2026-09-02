@@ -1,0 +1,23 @@
+---
+description: Zapret GUI is a wrapper around Flowseal zapret; do not patch strategy files
+alwaysApply: true
+---
+
+# Zapret wrapper
+
+This repo is a **GUI wrapper** around Flowseal `zapret-discord-youtube`. Official strategies live in a zapret folder the user picks (or next to the EXE).
+
+- **Do not** edit `general*.bat`, `service.bat`, or other files inside the zapret package. Updates overwrite them.
+- Add sites only via zapret **user lists** (`lists\list-general-user.txt` and other `*user*.txt`).
+- Discord/YouTube check hosts come from `utils\targets.txt` in the connected zapret folder.
+- Main window stays minimal (status, start/stop, live checks, add-site). Settings, tests, lists, and log live in the second window.
+- Wrapper version lives in `VERSION`. Bump it when the GUI behavior changes. Running zapret is detected via service `zapret` and `winws.exe`.
+- Launch WPF windows only through `ZapretUiHost` in `zapret-gui.ps1`. Do not call `ShowDialog` / `Application.Run` / `Dispatcher.PushFrame` from PowerShell.
+- Stop, restart, inspect, or capture arguments only for the `winws.exe` whose executable path belongs to the connected zapret folder. Never kill every `winws.exe` or use the first process by name.
+- Tests and service replacement are transactional: preserve the current service configuration and restore it after cancellation, failed tests, or failed installation. Never choose a “best” strategy unless it has at least one successful target check.
+- Do not delete shared WinDivert services unless ownership by this zapret installation is proven.
+- For elevated service operations, pass arguments directly to `sc.exe`; never interpolate paths or captured command lines into `cmd.exe /c`.
+- Treat downloaded zapret archives as executable supply-chain input: pin the expected release asset, validate extraction paths, and verify integrity/authenticity when upstream provides a checksum or signature.
+- Discovery is read-only. Never execute `service.bat`, a strategy, or another discovered file merely by scanning/selecting a folder; validate the package and require an explicit user action before the first elevated execution.
+- A valid explicitly saved `ZapretPath` takes precedence over nearby-folder discovery.
+- Treat `zapret-discord-youtube-*` as external runtime data and `zapret-gui.settings.json` as machine-local state: do not edit or commit either. Launch only the root wrapper/packaged EXE, never stale `zapret-gui.*` copies inside a zapret package.

@@ -1,0 +1,13 @@
+# Local zapret runtime and machine state
+zapret-discord-youtube-*/
+zapret-gui.settings.json
+
+# Generated artifacts and test output
+dist/
+.build/
+test-results/
+*.tmp
+*.bak
+
+# PowerShell crash logs
+crash.log
