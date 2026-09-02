@@ -13,15 +13,15 @@ description: >-
 - **Wrapper only.** Do not patch `general*.bat` / `service.bat` in the zapret folder; GitHub updates replace them.
 - **User lists:** `lists\list-general-user.txt` (and other `*user*.txt`). The GUI discovers them; strategies already wire `list-general-user`.
 - **Live Discord/YouTube:** hosts from `utils\targets.txt` (`DiscordMain`, `DiscordGateway`, … / `YouTubeWeb`, …). Fallback URLs only if the file is missing.
-- **Two windows:** main = status, start/stop, live checks, add-site. Settings = path, strategies, service, tests, lists, log.
+- **Two windows:** main = status, start/stop, live checks, add-site. Settings = path, strategies, service, tests, lists, log. About is a small dialog from the left-rail **i** button.
 - **Window host:** `[ZapretUiHost]::StartMainLoop()` / `ShowSettings()`. Read the PowerShell WPF skill before touching window lifetime.
 
 ## Version / download
 
 - **Versions:** wrapper version is `VERSION` in the project root (shown as GUI x.y.z). Zapret package version comes from `LOCAL_VERSION` in `service.bat`. Running state is scanned from service `zapret` and process `winws` (path matched to the connected folder).
-- When GUI behavior changes: bump `VERSION`, add an entry to `CHANGELOG.md`, and create an annotated git tag `vX.Y.Z` on that commit. Do not move or delete existing tags (`v1.0.20` is the first public snapshot).
-- Restore a snapshot: `git checkout vX.Y.Z`. GitHub also serves `.../archive/refs/tags/vX.Y.Z.zip`.
-- Releases API for the zip. Overlay shows download progress. Remember path in `zapret-gui.settings.json`.
+- When GUI behavior changes: bump `VERSION` and add an entry to `CHANGELOG.md`. Pack the EXE with `build-exe.ps1` into local `dist/`. Do not `git push` or publish a GitHub Release unless the user explicitly asks.
+- Restore a snapshot: `git checkout vX.Y.Z`. Do not move or delete existing tags (`v1.0.20` is the first public snapshot).
+- Releases API for the zapret engine zip. Overlay shows download progress. Remember path in `zapret-gui.settings.json`.
 
 ## Service
 

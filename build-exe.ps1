@@ -113,6 +113,19 @@ try {
     if (-not $source.Contains($fallback)) {
         throw 'Unable to embed the GUI version into the compiled script.'
     }
+    $releaseDate = (Get-Date).ToString('yyyy-MM-dd')
+    $releaseDatePath = Join-Path $PSScriptRoot 'RELEASE_DATE'
+    if (Test-Path -LiteralPath $releaseDatePath -PathType Leaf) {
+        $fromFile = ([IO.File]::ReadAllText($releaseDatePath)).Trim()
+        if ($fromFile -match '^\d{4}-\d{2}-\d{2}') {
+            $releaseDate = $fromFile.Substring(0, 10)
+        }
+    }
+    $dateFallback = "return '$releaseDate'"
+    $source = $source.Replace("return '1970-01-01'", $dateFallback)
+    if (-not $source.Contains($dateFallback)) {
+        throw 'Unable to embed the GUI release date into the compiled script.'
+    }
     $gearAssign = '$script:EmbeddedSettingsGearPngBase64 = [string]::Empty'
     if (-not $source.Contains($gearAssign)) {
         throw 'Unable to find the settings-gear embed assignment in the compiled script.'
@@ -207,6 +220,8 @@ try {
     }
     Copy-Item -LiteralPath $readmeSrc -Destination (Join-Path $releaseDirectory 'README.md')
     Copy-Item -LiteralPath $readmeSrc -Destination (Join-Path $releaseDirectory 'README.txt')
+    Copy-Item -LiteralPath $versionPath -Destination (Join-Path $releaseDirectory 'VERSION')
+    [IO.File]::WriteAllText((Join-Path $releaseDirectory 'RELEASE_DATE'), $releaseDate, [Text.UTF8Encoding]::new($false))
 
     $files = Get-ChildItem -LiteralPath $releaseDirectory -File | Sort-Object Name
     $hashLines = foreach ($file in $files) {

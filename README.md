@@ -37,6 +37,8 @@
 - Автоподбор лучшей стратегии и установка её службой
 - Добавление сайтов только в пользовательские списки (`*user*.txt`)
 - Тест своих URL разными стратегиями (кнопка «Тест сайтов»)
+- Кнопка «О программе»: версия оболочки, дата выпуска, разработчик
+- Автопроверка новой версии самой оболочки на GitHub (скачивание с прогрессом и перезапуск)
 - Сворачивание в трей (закрытие окна не выключает обход)
 - Автозапуск Windows по умолчанию: запись в «Автозагрузке» и задача Планировщика без повторного UAC
 - Автопроверка новой сборки zapret на GitHub, пока GUI запущен
@@ -130,6 +132,8 @@ By default the app **registers itself in Windows Startup**. The close button **h
 - Auto-test strategies and install the best one as a service
 - Add sites only to user lists (`*user*.txt`)
 - Test your own URLs against every strategy (the **Test sites** button)
+- **About** button: wrapper version, release date, developer
+- Daily self-update check for the GUI on GitHub (download progress, then restart)
 - Minimize to tray (closing the window does not stop bypass)
 - Windows Startup enabled by default (Task Manager Startup entry plus an elevated scheduled task, no extra UAC at logon)
 - Daily GitHub check for a newer zapret build while the GUI is running

@@ -21,6 +21,11 @@ git checkout main
 
 ---
 
+## 1.0.23
+
+- Кнопка «О программе» под настройками: версия оболочки, дата выпуска, разработчик
+- Раз в сутки GUI проверяет свой релиз на GitHub и предлагает скачать обновление с прогрессом
+
 ## 1.0.22
 
 - Окно «Тест сайтов»: свои URL проверяются всеми стратегиями
@@ -43,3 +48,8 @@ git checkout main
 # English
 
 Tags `vX.Y.Z` snapshot the **whole repo**, not only the packaged EXE. Restore with `git checkout v1.0.20`. The wrapper number in `VERSION` must match the tag.
+
+## 1.0.23
+
+- About button under Settings: wrapper version, release date, developer
+- Daily self-update check against the GitHub GUI release, with download progress

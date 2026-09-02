@@ -27,11 +27,16 @@ $script:OwnPath = Get-OwnPath
 $script:IsPackaged = [bool]($script:OwnPath -and $script:OwnPath.ToLower().EndsWith('.exe'))
 $script:LaunchArgs = @($args | ForEach-Object { [string]$_ })
 $script:StartInTray = $false
+$script:ShowUpdatedNotice = $false
 $script:GuiAutostartTaskName = 'ZapretGUI'
 $script:GuiAutostartRunName = 'ZAPRET GUI'
 foreach ($launchArg in $script:LaunchArgs) {
     if ($launchArg -eq '-tray' -or $launchArg -eq '/tray' -or $launchArg -eq '--tray') {
         $script:StartInTray = $true
+    }
+    if ($launchArg -eq '-updated' -or $launchArg -eq '/updated' -or $launchArg -eq '--updated') {
+        $script:ShowUpdatedNotice = $true
+        $script:StartInTray = $false
     }
 }
 
@@ -122,6 +127,7 @@ if (-not ('ZapretUiHost' -as [type])) {
     $wpfRefs = @($wpfRefs | Select-Object -Unique)
     Add-Type -ReferencedAssemblies $wpfRefs -TypeDefinition @'
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
@@ -245,6 +251,90 @@ public static class ZapretUiHost {
             app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         }
         Window dlg = CreateAskWindow(title, body == null ? "" : body, buttons);
+        if (_main != null && _main.IsVisible) {
+            dlg.Owner = _main;
+            dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        } else {
+            dlg.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        }
+        DispatcherFrame frame = new DispatcherFrame();
+        EventHandler onClosed = null;
+        onClosed = delegate(object s, EventArgs e) {
+            dlg.Closed -= onClosed;
+            frame.Continue = false;
+        };
+        dlg.Closed += onClosed;
+        dlg.Show();
+        dlg.Activate();
+        Dispatcher.PushFrame(frame);
+        return _dialogResult;
+    }
+
+    public static object ShowAbout(string version, string released, string developer) {
+        _dialogResult = "OK";
+        if (Application.Current == null) {
+            Application app = new Application();
+            app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        }
+        Window dlg = new Window();
+        dlg.WindowStyle = WindowStyle.None;
+        dlg.AllowsTransparency = true;
+        dlg.ResizeMode = ResizeMode.NoResize;
+        dlg.ShowInTaskbar = false;
+        dlg.Width = 460;
+        dlg.SizeToContent = SizeToContent.Height;
+        dlg.Background = Brushes.Transparent;
+        dlg.FontFamily = new FontFamily("Segoe UI");
+
+        Border chrome = new Border();
+        chrome.Background = HexBrush("#2B2D31");
+        chrome.BorderBrush = HexBrush("#1E1F22");
+        chrome.BorderThickness = new Thickness(1);
+        chrome.CornerRadius = new CornerRadius(8);
+        chrome.Padding = new Thickness(20);
+
+        StackPanel root = new StackPanel();
+        TextBlock titleBlock = new TextBlock();
+        titleBlock.Text = "О программе";
+        titleBlock.FontSize = 16;
+        titleBlock.FontWeight = FontWeights.Bold;
+        titleBlock.Foreground = HexBrush("#F2F3F5");
+        root.Children.Add(titleBlock);
+
+        TextBlock bodyBlock = new TextBlock();
+        bodyBlock.TextWrapping = TextWrapping.Wrap;
+        bodyBlock.FontSize = 14;
+        bodyBlock.Foreground = HexBrush("#B5BAC1");
+        bodyBlock.Margin = new Thickness(0, 12, 0, 20);
+        bodyBlock.Text = "Версия: " + (version ?? "") + "\n"
+            + "Дата выпуска: " + (released ?? "—") + "\n\n"
+            + "Разработчик: " + (developer ?? "") + "\n"
+            + "GitHub: github.com/surensuccessful-ui/zapret-gui\n\n"
+            + "Форк оригинального zapret (bol-van).\n"
+            + "Движок: Flowseal zapret-discord-youtube.";
+        root.Children.Add(bodyBlock);
+
+        StackPanel row = new StackPanel();
+        row.Orientation = Orientation.Horizontal;
+        row.HorizontalAlignment = HorizontalAlignment.Right;
+        Button github = MakeAskButton("GitHub", "GitHub", "#5865F2", "#FFFFFF", dlg);
+        github.Click += delegate(object s, RoutedEventArgs e) {
+            try {
+                Process.Start(new ProcessStartInfo("https://github.com/surensuccessful-ui/zapret-gui") { UseShellExecute = true });
+            } catch { }
+            _dialogResult = "OK";
+        };
+        row.Children.Add(github);
+        row.Children.Add(MakeAskButton("Понятно", "OK", "#4E5058", "#DBDEE1", dlg));
+        root.Children.Add(row);
+        chrome.Child = root;
+        dlg.Content = chrome;
+        dlg.KeyDown += delegate(object s, KeyEventArgs e) {
+            if (e.Key == Key.Escape) {
+                _dialogResult = "OK";
+                dlg.Close();
+            }
+        };
         if (_main != null && _main.IsVisible) {
             dlg.Owner = _main;
             dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -452,6 +542,9 @@ if (-not $singleInstanceOk) {
 }
 
 $script:GithubApiUrl = 'https://api.github.com/repos/Flowseal/zapret-discord-youtube/releases/latest'
+$script:GuiGithubApiUrl = 'https://api.github.com/repos/surensuccessful-ui/zapret-gui/releases/latest'
+$script:GuiGithubRepoUrl = 'https://github.com/surensuccessful-ui/zapret-gui'
+$script:GuiDeveloperName = 'surensuccessful-ui'
 
 $script:AppDir = Get-AppDirectory
 $script:SettingsPath = Join-Path $script:AppDir 'zapret-gui.settings.json'
@@ -489,7 +582,12 @@ $script:UpdateFromRoot = ''
 $script:OverlayRetryUpdate = $false
 $script:NotifiedZapretVersion = ''
 $script:LastZapretUpdateCheck = ''
+$script:LastGuiUpdateCheck = ''
+$script:DeclinedGuiVersion = ''
 $script:NextGithubCheckAt = [datetime]::MinValue
+$script:NextGuiUpdateCheckAt = [datetime]::MaxValue
+$script:GuiApplyRestart = $false
+$script:MainUiReady = $false
 $script:TrayIcon = $null
 $script:LogQueue = [System.Collections.Concurrent.ConcurrentQueue[object]]::new()
 $script:BrushConv = [Windows.Media.BrushConverter]::new()
@@ -522,6 +620,35 @@ function Get-GuiVersion {
     return '1.0.0'
 }
 $script:GuiVersion = Get-GuiVersion
+
+function Get-GuiReleaseDate {
+    $candidates = @(
+        (Join-Path $script:AppDir 'RELEASE_DATE')
+        (Join-Path $script:AppDir 'zapret-gui.release-date')
+    )
+    foreach ($p in $candidates) {
+        if ($p -and (Test-Path -LiteralPath $p)) {
+            $text = ([IO.File]::ReadAllText($p)).Trim()
+            if ($text -match '^\d{4}-\d{2}-\d{2}') { return $text.Substring(0, 10) }
+        }
+    }
+    if ($script:IsPackaged -and $script:OwnPath -and (Test-Path -LiteralPath $script:OwnPath)) {
+        try { return ([IO.File]::GetLastWriteTime($script:OwnPath).ToString('yyyy-MM-dd')) } catch { }
+    }
+    return '1970-01-01'
+}
+
+function Format-GuiReleaseDate {
+    param([string]$Raw)
+    if ([string]::IsNullOrWhiteSpace($Raw) -or $Raw -eq '1970-01-01') { return '—' }
+    try {
+        $dt = [datetime]::ParseExact($Raw.Substring(0, [Math]::Min(10, $Raw.Length)), 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+        return $dt.ToString('d MMMM yyyy', [Globalization.CultureInfo]::GetCultureInfo('ru-RU'))
+    } catch {
+        return $Raw
+    }
+}
+$script:GuiReleaseDate = Get-GuiReleaseDate
 $script:EmbeddedSettingsGearPngBase64 = [string]::Empty
 
 function Save-Settings {
@@ -534,6 +661,8 @@ function Save-Settings {
         HealthIntervalMinutes = [int]$script:HealthIntervalMinutes
         FirstRunCompleted = [bool]$script:FirstRunCompleted
         LastZapretUpdateCheck = [string]$script:LastZapretUpdateCheck
+        LastGuiUpdateCheck = [string]$script:LastGuiUpdateCheck
+        DeclinedGuiVersion = [string]$script:DeclinedGuiVersion
         NotifiedZapretVersion = [string]$script:NotifiedZapretVersion
     }
     $json = $data | ConvertTo-Json
@@ -954,6 +1083,321 @@ function Complete-ZapretUpdate {
     }
 }
 
+function ConvertTo-GuiVersionText {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+    return ($Text.Trim() -replace '^v', '')
+}
+
+function Test-GuiDownloadUri {
+    param([string]$Url)
+    try {
+        $uri = [Uri]$Url
+        if ($uri.Scheme -ne 'https') { return $false }
+        $hostName = $uri.Host.ToLowerInvariant()
+        return (
+            $hostName -eq 'github.com' -or
+            $hostName.EndsWith('.github.com') -or
+            $hostName -eq 'objects.githubusercontent.com' -or
+            $hostName.EndsWith('.githubusercontent.com')
+        )
+    } catch {
+        return $false
+    }
+}
+
+function Show-AboutWindow {
+    $released = Format-GuiReleaseDate $script:GuiReleaseDate
+    $about = [ZapretUiHost]::ShowAbout([string]$script:GuiVersion, [string]$released, [string]$script:GuiDeveloperName)
+}
+
+function Start-GuiUpdateCheck {
+    if ($script:ShowUpdatedNotice) { return }
+    if ($script:GuiUpdateCheckSync -and -not $script:GuiUpdateCheckSync.Done) { return }
+    if ($script:GuiUpdateSync -and -not $script:GuiUpdateSync.Done) { return }
+    $sync = [hashtable]::Synchronized(@{ Done = $false; Version = ''; Error = ''; DownloadUrl = ''; SumsUrl = ''; Published = '' })
+    $script:GuiUpdateCheckSync = $sync
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    $guiCheckPipeline = $ps.AddScript({
+        param($ApiUrl, $Sync)
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $wc = New-Object Net.WebClient
+            $wc.Headers['User-Agent'] = 'ZapretGUI'
+            $wc.Headers['Accept'] = 'application/vnd.github+json'
+            $wc.Headers['Cache-Control'] = 'no-cache'
+            $json = $wc.DownloadString($ApiUrl)
+            $wc.Dispose()
+            $rel = $json | ConvertFrom-Json
+            $Sync.Version = [string]$rel.tag_name
+            $Sync.Published = [string]$rel.published_at
+            $exe = $null
+            $sums = $null
+            foreach ($asset in @($rel.assets)) {
+                $name = [string]$asset.name
+                if ($name -eq 'ZapretGUI.exe') { $exe = $asset }
+                elseif (-not $exe -and $name -match '^ZapretGUI-.*\.exe$') { $exe = $asset }
+                if ($name -eq 'SHA256SUMS.txt') { $sums = $asset }
+            }
+            if ($exe) { $Sync.DownloadUrl = [string]$exe.browser_download_url }
+            if ($sums) { $Sync.SumsUrl = [string]$sums.browser_download_url }
+        } catch {
+            $Sync.Error = $_.Exception.Message
+        }
+        $Sync.Done = $true
+    }).AddArgument($script:GuiGithubApiUrl).AddArgument($sync)
+    $script:GuiUpdateCheckPs = $ps
+    $script:GuiUpdateCheckRs = $rs
+    $script:GuiUpdateCheckHandle = $ps.BeginInvoke()
+}
+
+function Complete-GuiUpdateCheck {
+    if (-not $script:MainUiReady) { return }
+    if (-not $script:GuiUpdateCheckSync -or -not $script:GuiUpdateCheckSync.Done) { return }
+    $sync = $script:GuiUpdateCheckSync
+    $script:GuiUpdateCheckSync = $null
+    try { $ignored = $script:GuiUpdateCheckPs.EndInvoke($script:GuiUpdateCheckHandle) } catch { }
+    try { $script:GuiUpdateCheckPs.Dispose() } catch { }
+    try { $script:GuiUpdateCheckRs.Close(); $script:GuiUpdateCheckRs.Dispose() } catch { }
+    $script:LastGuiUpdateCheck = (Get-Date).ToString('yyyy-MM-dd')
+    $script:NextGuiUpdateCheckAt = (Get-Date).Date.AddDays(1)
+    Save-SettingsSafe
+    if ($sync.Error) {
+        Add-Log "Проверка обновления GUI: $($sync.Error)" '#8B9BB4'
+        $script:NextGuiUpdateCheckAt = (Get-Date).AddHours(6)
+        return
+    }
+    $remote = ConvertTo-GuiVersionText ([string]$sync.Version)
+    if ([string]::IsNullOrWhiteSpace($remote)) { return }
+    $local = ConvertTo-GuiVersionText ([string]$script:GuiVersion)
+    if ((Compare-ZapretVersion $remote $local) -le 0) { return }
+    if ($script:DeclinedGuiVersion -eq $remote) { return }
+    if ($script:TestBusy -or $script:SiteTestBusy -or ($script:SetupSync -and -not $script:SetupSync.Done) -or ($script:GuiUpdateSync -and -not $script:GuiUpdateSync.Done)) {
+        $script:NextGuiUpdateCheckAt = (Get-Date).AddMinutes(15)
+        return
+    }
+    $url = [string]$sync.DownloadUrl
+    if (-not (Test-GuiDownloadUri $url)) {
+        Add-Log 'Релиз GUI на GitHub есть, но файла ZapretGUI.exe в нём нет.' '#E8C36A'
+        return
+    }
+    $shown = [ZapretUiHost]::ShowMain()
+    $answer = Show-ZapretDialog -Title 'Обновление ZAPRET GUI' -Buttons 'YesNo' -Message "Доступна новая версия оболочки $remote (у вас $local).`n`nСкачать и установить обновление? Старая программа закроется, новая откроется сама."
+    if ($answer -ne 'Yes') {
+        $script:DeclinedGuiVersion = $remote
+        Save-SettingsSafe
+        Add-Log "Обновление GUI $remote отложено" '#8B9BB4'
+        return
+    }
+    Start-GuiSelfUpdate -Version $remote -Url $url -SumsUrl ([string]$sync.SumsUrl)
+}
+
+function Start-GuiSelfUpdate {
+    param(
+        [string]$Version,
+        [string]$Url,
+        [string]$SumsUrl
+    )
+    if ($script:GuiUpdateSync -and -not $script:GuiUpdateSync.Done) { return }
+    Show-BusyOverlay 'Обновление ZAPRET GUI' "Скачиваю $Version..." 0
+    Add-Log "Скачиваю ZAPRET GUI $Version" '#5865F2'
+    $sync = [hashtable]::Synchronized(@{
+        Done = $false; Error = ''; Path = ''; Percent = 0; Status = 'Подключение к GitHub...'; Version = $Version
+    })
+    $script:GuiUpdateSync = $sync
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    $guiDlPipeline = $ps.AddScript({
+        param($DownloadUrl, $SumsUrl, $Version, $Sync)
+        function Fail($msg) { $Sync.Error = $msg; $Sync.Done = $true }
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            function TestHost([string]$u) {
+                $uri = [Uri]$u
+                if ($uri.Scheme -ne 'https') { return $false }
+                $h = $uri.Host.ToLowerInvariant()
+                return ($h -eq 'github.com' -or $h.EndsWith('.github.com') -or $h -eq 'objects.githubusercontent.com' -or $h.EndsWith('.githubusercontent.com'))
+            }
+            if (-not (TestHost $DownloadUrl)) { throw "Недопустимый адрес загрузки: $DownloadUrl" }
+            $expectedHash = ''
+            if ($SumsUrl -and (TestHost $SumsUrl)) {
+                try {
+                    $wc = New-Object Net.WebClient
+                    $wc.Headers['User-Agent'] = 'ZapretGUI'
+                    $sumsText = [string]$wc.DownloadString($SumsUrl)
+                    $wc.Dispose()
+                    foreach ($line in ($sumsText -split "`n")) {
+                        if ($line -match '^([0-9a-fA-F]{64})\s+ZapretGUI\.exe\s*$') { $expectedHash = $Matches[1].ToLowerInvariant(); break }
+                        if (-not $expectedHash -and $line -match '^([0-9a-fA-F]{64})\s+ZapretGUI-.*\.exe\s*$') { $expectedHash = $Matches[1].ToLowerInvariant() }
+                    }
+                } catch { }
+            }
+            $Sync.Status = "Скачиваю ZAPRET GUI $Version"
+            $tmpDir = Join-Path $env:TEMP ('zapret-gui-self-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+            New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+            $tmpPath = Join-Path $tmpDir 'ZapretGUI.exe'
+            $req = [Net.HttpWebRequest]::Create($DownloadUrl)
+            $req.UserAgent = 'ZapretGUI'
+            $req.AllowAutoRedirect = $true
+            $req.Timeout = 60000
+            $resp = $req.GetResponse()
+            try {
+                $finalHost = ([Uri]$resp.ResponseUri).Host.ToLowerInvariant()
+                if (-not ($finalHost -eq 'github.com' -or $finalHost.EndsWith('.github.com') -or $finalHost -eq 'objects.githubusercontent.com' -or $finalHost.EndsWith('.githubusercontent.com'))) {
+                    throw "GitHub перенаправил загрузку на недопустимый хост: $finalHost"
+                }
+                $total = $resp.ContentLength
+                if ($total -gt 30MB) { throw 'Файл обновления слишком большой.' }
+                $input = $resp.GetResponseStream()
+                $output = [IO.File]::Create($tmpPath)
+                try {
+                    $buf = New-Object byte[] 65536
+                    $readTotal = [int64]0
+                    $header = New-Object byte[] 2
+                    $headerGot = 0
+                    while (($n = $input.Read($buf, 0, $buf.Length)) -gt 0) {
+                        if ($headerGot -lt 2) {
+                            $need = [Math]::Min(2 - $headerGot, $n)
+                            [Array]::Copy($buf, 0, $header, $headerGot, $need)
+                            $headerGot += $need
+                            if ($headerGot -ge 2 -and -not ($header[0] -eq 0x4D -and $header[1] -eq 0x5A)) {
+                                throw 'Файл обновления не является программой Windows (EXE).'
+                            }
+                        }
+                        $output.Write($buf, 0, $n)
+                        $readTotal += $n
+                        if ($total -gt 0) { $Sync.Percent = [int][Math]::Min(100, (100.0 * $readTotal / $total)) }
+                        $Sync.Status = ('Скачиваю {0}  ({1:N1} МБ)' -f $Version, ($readTotal / 1MB))
+                    }
+                    if ($headerGot -lt 2) { throw 'Файл обновления пуст или повреждён.' }
+                } finally {
+                    $output.Dispose()
+                    $input.Dispose()
+                }
+            } finally {
+                $resp.Close()
+            }
+            if ($expectedHash) {
+                $actual = (Get-FileHash -LiteralPath $tmpPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($actual -ne $expectedHash) { throw 'SHA-256 скачанного файла не совпал с SHA256SUMS.txt.' }
+            }
+            $Sync.Percent = 100
+            $Sync.Status = 'Файл скачан'
+            $Sync.Path = $tmpPath
+            $Sync.Done = $true
+        } catch {
+            Fail $_.Exception.Message
+        }
+    }).AddArgument($Url).AddArgument($SumsUrl).AddArgument($Version).AddArgument($sync)
+    $script:GuiUpdatePs = $ps
+    $script:GuiUpdateRs = $rs
+    $script:GuiUpdateHandle = $ps.BeginInvoke()
+}
+
+function Complete-GuiSelfUpdate {
+    if (-not $script:GuiUpdateSync -or -not $script:GuiUpdateSync.Done) { return }
+    $sync = $script:GuiUpdateSync
+    $script:GuiUpdateSync = $null
+    try { $ignored = $script:GuiUpdatePs.EndInvoke($script:GuiUpdateHandle) } catch { }
+    try { $script:GuiUpdatePs.Dispose() } catch { }
+    try { $script:GuiUpdateRs.Close(); $script:GuiUpdateRs.Dispose() } catch { }
+    if ($sync.Error) {
+        Hide-BusyOverlay
+        Add-Log "Обновление GUI не удалось: $($sync.Error)" '#F23F42'
+        $failDlg = Show-ZapretDialog -Title 'Обновление ZAPRET GUI' -Buttons 'OK' -Message "Не удалось скачать обновление:`n$($sync.Error)"
+        return
+    }
+    $src = [string]$sync.Path
+    $ver = [string]$sync.Version
+    if (-not $src -or -not (Test-Path -LiteralPath $src)) {
+        Hide-BusyOverlay
+        return
+    }
+    try {
+        Apply-GuiUpdate -SourcePath $src -Version $ver
+    } catch {
+        Hide-BusyOverlay
+        Add-Log "Не удалось установить обновление: $($_.Exception.Message)" '#F23F42'
+        $failDlg = Show-ZapretDialog -Title 'Обновление ZAPRET GUI' -Buttons 'OK' -Message $_.Exception.Message
+    }
+}
+
+function Apply-GuiUpdate {
+    param([string]$SourcePath, [string]$Version)
+    $target = [string]$script:OwnPath
+    if (-not $script:IsPackaged) {
+        $target = Join-Path $script:AppDir 'ZapretGUI.exe'
+    }
+    if ([string]::IsNullOrWhiteSpace($target)) { throw 'Не удалось определить путь программы для замены.' }
+    $updaterDir = Join-Path $env:TEMP ('zapret-gui-apply-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $updaterDir -Force | Out-Null
+    $updaterPath = Join-Path $updaterDir 'apply-update.ps1'
+    $updater = @'
+param(
+    [string]$TargetPath,
+    [string]$SourcePath,
+    [int]$WaitPid,
+    [string]$Version
+)
+$ErrorActionPreference = 'Continue'
+$deadline = (Get-Date).AddSeconds(90)
+while ((Get-Date) -lt $deadline) {
+    $alive = $null
+    try { $alive = Get-Process -Id $WaitPid -ErrorAction Stop } catch { $alive = $null }
+    if (-not $alive) { break }
+    Start-Sleep -Milliseconds 400
+}
+$copied = $false
+foreach ($i in 1..30) {
+    try {
+        Copy-Item -LiteralPath $SourcePath -Destination $TargetPath -Force
+        $copied = $true
+        break
+    } catch {
+        Start-Sleep -Milliseconds 400
+    }
+}
+if (-not $copied) { exit 1 }
+try { Remove-Item -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue } catch { }
+$psi = New-Object Diagnostics.ProcessStartInfo
+$psi.FileName = $TargetPath
+$psi.Arguments = '-updated'
+$psi.UseShellExecute = $true
+$psi.WorkingDirectory = [IO.Path]::GetDirectoryName($TargetPath)
+$started = [Diagnostics.Process]::Start($psi)
+exit 0
+'@
+    $enc = [Text.UTF8Encoding]::new($true)
+    [IO.File]::WriteAllText($updaterPath, $updater, $enc)
+    Show-BusyOverlay 'Обновление ZAPRET GUI' 'Перезапуск программы...' 100
+    $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $psExe
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+    $quotedUpdater = '"' + ($updaterPath -replace '"', '\"') + '"'
+    $quotedTarget = '"' + ($target -replace '"', '\"') + '"'
+    $quotedSource = '"' + ($SourcePath -replace '"', '\"') + '"'
+    $startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $quotedUpdater -TargetPath $quotedTarget -SourcePath $quotedSource -WaitPid $PID -Version `"$Version`""
+    $updaterProc = [Diagnostics.Process]::Start($startInfo)
+    if (-not $updaterProc) { throw 'Не удалось запустить установщик обновления.' }
+    $released = [ZapretSingleInstance]::Release()
+    $script:AllowMainClose = $true
+    $script:AllowSettingsClose = $true
+    $script:AllowSiteTestClose = $true
+    $script:GuiApplyRestart = $true
+    Save-SettingsSafe
+    Stop-Watcher
+    Dispose-TrayIcon
+    $closed = [ZapretUiHost]::CloseMain()
+}
+
 function Complete-GithubCheck {
     if (-not $script:GithubSync -or -not $script:GithubSync.Done) { return }
     $sync = $script:GithubSync
@@ -1267,6 +1711,12 @@ function Show-ZapretSetupOffer {
 }
 
 function Update-BusyOverlayFromState {
+    if ($script:GuiUpdateSync -and -not $script:GuiUpdateSync.Done) {
+        $st = [string]$script:GuiUpdateSync.Status
+        $pct = [int]$script:GuiUpdateSync.Percent
+        Show-BusyOverlay 'Обновление ZAPRET GUI' $st $(if ($pct -gt 0) { $pct } else { -1 })
+        return
+    }
     if ($script:SetupSync -and -not $script:SetupSync.Done) {
         $st = [string]$script:SetupSync.Status
         $pct = [int]$script:SetupSync.Percent
@@ -3199,6 +3649,14 @@ $xaml = @'
             <TextBlock x:Name="TxtSettingsGearFallback" Text="⚙" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
           </Grid>
         </Button>
+        <Button x:Name="BtnAbout" ToolTip="О программе" Style="{StaticResource Btn}" Width="36" Height="36" Margin="0,10,0,0" Padding="0" Background="#2B2D31">
+          <Viewbox Width="22" Height="22">
+            <Grid Width="24" Height="24">
+              <Ellipse Stroke="#DBDEE1" StrokeThickness="1.8" Fill="Transparent"/>
+              <TextBlock Text="i" FontFamily="Georgia" FontSize="14" FontWeight="Bold" FontStyle="Italic" Foreground="#DBDEE1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
+            </Grid>
+          </Viewbox>
+        </Button>
       </StackPanel>
     </Border>
 
@@ -3825,7 +4283,7 @@ function Bind-GuiNames {
 }
 Bind-GuiNames $window @(
     'DragMain','BtnMinimizeMain','BtnCloseMain',
-    'BtnSettings','BtnStart','BtnStop','DotStatus','LblStatus','LblGuiVersion','LblZapretVer','PnlUpdate','LblUpdate','BtnRelease',
+    'BtnSettings','BtnAbout','BtnStart','BtnStop','DotStatus','LblStatus','LblGuiVersion','LblZapretVer','PnlUpdate','LblUpdate','BtnRelease',
     'ImgSettingsGear','TxtSettingsGearFallback',
     'CardDiscord','CardYoutube','PnlDiscord','PnlYoutube','LblDiscordSummary','LblYoutubeSummary','TxtHost','TxtHostHint','BtnAdd','BtnSiteTest',
     'PnlOverlay','LblOverlayTitle','LblOverlaySub','PrgOverlay','LblOverlayPct','BtnOverlayRetry'
@@ -3971,6 +4429,9 @@ if ($script:BtnCloseSiteTest) {
 }
 if ($script:BtnSettings) {
     $script:BtnSettings.Add_Click({ Show-SettingsWindow })
+}
+if ($script:BtnAbout) {
+    $script:BtnAbout.Add_Click({ Show-AboutWindow })
 }
 if ($script:CardDiscord) {
     $script:CardDiscord.Add_MouseLeftButtonUp({ Start-LiveHealthCheck -Force })
@@ -4248,6 +4709,20 @@ $window.Add_Loaded({
         if ($cfg -and $cfg.LastZapretUpdateCheck) {
             $script:LastZapretUpdateCheck = [string]$cfg.LastZapretUpdateCheck
         }
+        if ($cfg -and $cfg.LastGuiUpdateCheck) {
+            $script:LastGuiUpdateCheck = [string]$cfg.LastGuiUpdateCheck
+        }
+        if ($cfg -and $cfg.DeclinedGuiVersion) {
+            $script:DeclinedGuiVersion = [string]$cfg.DeclinedGuiVersion
+        }
+        if ($script:LastGuiUpdateCheck -eq (Get-Date).ToString('yyyy-MM-dd')) {
+            $script:NextGuiUpdateCheckAt = (Get-Date).Date.AddDays(1)
+        }
+        if ($script:ShowUpdatedNotice) {
+            $shownUpdated = [ZapretUiHost]::ShowMain()
+            $updatedDlg = Show-ZapretDialog -Title 'ZAPRET GUI' -Buttons 'OK' -Message "Оболочка успешно обновлена до $($script:GuiVersion)."
+            $script:ShowUpdatedNotice = $false
+        }
         $path = Resolve-ZapretPath
         if ($path) {
             if (-not $script:Root) {
@@ -4272,10 +4747,26 @@ $window.Add_Loaded({
         }
     } catch {
         Add-Log $_.Exception.Message '#F23F42'
+    } finally {
+        $script:MainUiReady = $true
+        if ($script:NextGuiUpdateCheckAt -eq [datetime]::MaxValue) {
+            $script:NextGuiUpdateCheckAt = [datetime]::MinValue
+        }
     }
 })
 $window.Add_Closing({
     param($s, $e)
+    if ($script:GuiApplyRestart) {
+        $script:AllowSettingsClose = $true
+        $script:AllowSiteTestClose = $true
+        if ($script:SettingsWindow) {
+            try { $closedSettings = [ZapretUiHost]::CloseSettings() } catch { }
+        }
+        if ($script:SiteTestWindow) {
+            try { $closedSite = [ZapretUiHost]::CloseSiteTest() } catch { }
+        }
+        return
+    }
     if (-not $script:AllowMainClose) {
         $e.Cancel = $true
         Hide-MainToTray
@@ -4321,6 +4812,8 @@ $uiTimer.Add_Tick({
         Complete-StrategyTests
         Complete-SiteStrategyTests
         Complete-GithubCheck
+        Complete-GuiUpdateCheck
+        Complete-GuiSelfUpdate
         Complete-LiveHealthCheck
         if (-not $script:Restarting -and -not $script:TestBusy -and -not $script:SiteTestBusy) { Refresh-Status }
         $now = Get-Date
@@ -4331,6 +4824,10 @@ $uiTimer.Add_Tick({
         if ($now -ge $script:NextGithubCheckAt) {
             $script:NextGithubCheckAt = $now.Date.AddDays(1)
             Start-GithubCheck
+        }
+        if ($now -ge $script:NextGuiUpdateCheckAt -and $script:MainUiReady) {
+            $script:NextGuiUpdateCheckAt = $now.Date.AddDays(1)
+            Start-GuiUpdateCheck
         }
     } catch {
         Add-Log $_.Exception.Message '#F23F42'
