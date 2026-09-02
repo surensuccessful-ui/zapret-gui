@@ -4,6 +4,7 @@
 
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?logo=windows&logoColor=white)](https://github.com/surensuccessful-ui/zapret-gui/releases/latest)
 [![Release](https://img.shields.io/github/v/release/surensuccessful-ui/zapret-gui?label=release)](https://github.com/surensuccessful-ui/zapret-gui/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Made with Cursor](https://img.shields.io/badge/Made%20with-Cursor-000000?logo=cursor&logoColor=white)](https://cursor.com)
 
 **Форк оригинального [zapret](https://github.com/bol-van/zapret)** с графической оболочкой для Windows. Движок — сборка [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube).
@@ -65,6 +66,20 @@
 
 Поддержать автора zapret можно [на странице оригинального проекта](https://github.com/bol-van/zapret?tab=readme-ov-file#%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-%D1%80%D0%B0%D0%B7%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D1%87%D0%B8%D0%BA%D0%B0).
 
+### Лицензия
+
+Проект **открытый**, лицензия [MIT](LICENSE) — как у [оригинального zapret](https://github.com/bol-van/zapret/blob/master/docs/LICENSE.txt) и у [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube/blob/main/LICENSE.txt).
+
+Можно свободно использовать, копировать, изменять и распространять при сохранении текста лицензии и указания авторства. Программа поставляется **«как есть» (AS IS)**, без каких-либо гарантий.
+
+Если кто-то требует скачивать программу только со своего сайта или канала, удалять ссылки или видео и ссылается на «авторские права» — это не относится к этой лицензии. Код открыт.
+
+### Отказ от ответственности
+
+Автор оболочки **не принимает претензии** и **не несёт ответственности** за любые последствия использования программы: сбои, блокировки, претензии провайдеров или государственных органов, убытки и иные требования.
+
+Скачивая или запуская приложение, вы используете его **на свой страх и риск** и соглашаетесь с этим. В лицензии MIT прямо указано: авторы не отвечают по искам, убыткам и иной ответственности, связанным с программой.
+
 ---
 
 ## English
@@ -114,3 +129,17 @@ Closing the window **does not** stop the zapret service.
 2. [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) — Windows pack and strategies  
 
 You can support the original zapret author [here](https://github.com/bol-van/zapret?tab=readme-ov-file#%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-%D1%80%D0%B0%D0%B7%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D1%87%D0%B8%D0%BA%D0%B0).
+
+### License
+
+This project is **open source** under the [MIT License](LICENSE), same as [original zapret](https://github.com/bol-van/zapret/blob/master/docs/LICENSE.txt) and [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube/blob/main/LICENSE.txt).
+
+You may use, copy, modify, and distribute it as long as the license notice is kept. The software is provided **AS IS**, without warranty of any kind.
+
+If someone tells you to download it only from their site or channel, or to take down links or videos citing “copyright”, that is not how this license works. The code is public.
+
+### Disclaimer
+
+The author of this GUI **accepts no claims** and **is not liable** for any consequences of using the software: outages, blocks, actions by ISPs or authorities, damages, or other demands.
+
+By downloading or running the app you use it **at your own risk** and agree to this. The MIT License states that authors are not liable for any claim, damages, or other liability arising from the software.
