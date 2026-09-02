@@ -12,8 +12,8 @@ description: >-
 
 - **Wrapper only.** Do not patch `general*.bat` / `service.bat` in the zapret folder; GitHub updates replace them.
 - **User lists:** `lists\list-general-user.txt` (and other `*user*.txt`). The GUI discovers them; strategies already wire `list-general-user`.
-- **Live Discord/YouTube:** hosts from `utils\targets.txt` (`DiscordMain`, `DiscordGateway`, … / `YouTubeWeb`, …). Fallback URLs only if the file is missing.
-- **Two windows:** main = status, start/stop, live checks, add-site. Settings = path, strategies, service, tests, lists, log. About is a small dialog from the left-rail **i** button (it also checks GitHub for a newer wrapper). After a GUI self-update, rewrite Windows Startup to the new EXE path.
+- **Live Discord/YouTube:** hosts from `utils\targets.txt` (`DiscordMain`, `DiscordGateway`, … / `YouTubeWeb`, …). Fallback URLs only if the file is missing. Custom poll hosts live in `%APPDATA%\ZapretGUI\settings.json` (`CustomHealthHosts`); the main window shows a third column only when that list is not empty.
+- **Two windows:** main = status, start/stop, live checks, add-site. Settings = path, strategies, service, tests, lists, custom poll hosts, log. About is a small dialog from the left-rail **i** button (it also checks GitHub for a newer wrapper). The beetle button under it opens a GitHub issue and copies the GUI log to the clipboard. After a GUI self-update, rewrite Windows Startup to the new EXE path.
 - **Window host:** `[ZapretUiHost]::StartMainLoop()` / `ShowSettings()`. Read the PowerShell WPF skill before touching window lifetime.
 
 ## Version / download
@@ -21,7 +21,7 @@ description: >-
 - **Versions:** wrapper version is `VERSION` in the project root (shown as GUI x.y.z). Zapret package version comes from `LOCAL_VERSION` in `service.bat`. Running state is scanned from service `zapret` and process `winws` (path matched to the connected folder).
 - When GUI behavior changes: bump `VERSION` and add an entry to `CHANGELOG.md`. Pack the EXE with `build-exe.ps1` into local `dist/`. Do not `git push` or publish a GitHub Release unless the user explicitly asks.
 - Restore a snapshot: `git checkout vX.Y.Z`. Do not move or delete existing tags (`v1.0.20` is the first public snapshot).
-- Releases API for the zapret engine zip. Overlay shows download progress. Remember path in `zapret-gui.settings.json`.
+- Releases API for the zapret engine zip. Overlay shows download progress. Remember path in `%APPDATA%\ZapretGUI\settings.json`.
 
 ## Service
 
@@ -37,7 +37,7 @@ Install by capturing `winws.exe` args from the running strategy (same idea as `s
 - Download only the expected release asset, reject archive entries outside the extraction root, and verify upstream checksums/signatures when available.
 - Keep folder discovery and selection read-only. Validate the package and require an explicit user action before executing any discovered `service.bat`, strategy, or utility with elevated rights.
 - Prefer a valid explicitly saved `ZapretPath`; scan nearby folders only as fallback.
-- Keep unpacked `zapret-discord-youtube-*` folders and `zapret-gui.settings.json` out of version control. Launch the root wrapper/packaged EXE, not a stale GUI copied inside the zapret package.
+- Keep unpacked `zapret-discord-youtube-*` folders out of version control. Machine-local GUI state is `%APPDATA%\ZapretGUI\settings.json` (not a sidecar next to the EXE). Launch the root wrapper/packaged EXE, not a stale GUI copied inside the zapret package.
 
 ## When the GUI “fails to start”
 

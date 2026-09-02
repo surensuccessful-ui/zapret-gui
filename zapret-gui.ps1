@@ -23,6 +23,23 @@ function Get-AppDirectory {
     return (Get-Location).Path
 }
 
+function Get-GuiStateRoot {
+    $root = [string]$env:APPDATA
+    if ([string]::IsNullOrWhiteSpace($root)) { $root = [string]$env:LOCALAPPDATA }
+    if ([string]::IsNullOrWhiteSpace($root)) { $root = [string]$env:TEMP }
+    return $root
+}
+
+function Get-GuiStateDirectory {
+    param([string]$Root)
+    if ([string]::IsNullOrWhiteSpace($Root)) { $Root = Get-GuiStateRoot }
+    $dir = Join-Path $Root 'ZapretGUI'
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    return $dir
+}
+
 $script:OwnPath = Get-OwnPath
 $script:IsPackaged = [bool]($script:OwnPath -and $script:OwnPath.ToLower().EndsWith('.exe'))
 $script:LaunchArgs = @($args | ForEach-Object { [string]$_ })
@@ -591,14 +608,14 @@ $script:GithubApiUrl = 'https://api.github.com/repos/Flowseal/zapret-discord-you
 $script:GuiGithubApiUrl = 'https://api.github.com/repos/surensuccessful-ui/zapret-gui/releases/latest'
 $script:GuiGithubRepoUrl = 'https://github.com/surensuccessful-ui/zapret-gui'
 $script:GuiDeveloperName = 'surensuccessful-ui'
+$script:GuiGithubIssuesNewUrl = 'https://github.com/surensuccessful-ui/zapret-gui/issues/new'
 
 $script:AppDir = Get-AppDirectory
-$script:SettingsPath = Join-Path $script:AppDir 'zapret-gui.settings.json'
-$appDataSettings = Join-Path $env:APPDATA 'ZapretGUI\settings.json'
-if (-not (Test-Path -LiteralPath $script:SettingsPath) -and (Test-Path -LiteralPath $appDataSettings)) {
-    $script:SettingsPath = $appDataSettings
-}
-$script:SettingsExistedAtStartup = Test-Path -LiteralPath $script:SettingsPath
+$script:SettingsSchemaVersion = 1
+$script:SettingsPath = $null
+$script:SettingsBag = [ordered]@{}
+$script:SettingsExistedAtStartup = $false
+$script:SettingsMigratedFrom = ''
 $script:DummyHost = 'domain.example.abc'
 $script:DummyIp = '203.0.113.113/32'
 $script:Root = ''
@@ -619,7 +636,8 @@ $script:WatchTimer = $null
 $script:HealthIntervalMinutes = 1
 $script:NextHealthCheckAt = [datetime]::MinValue
 $script:HealthCheckPending = $false
-$script:FirstRunCompleted = $script:SettingsExistedAtStartup
+$script:CustomHealthHosts = [System.Collections.Generic.List[string]]::new()
+$script:FirstRunCompleted = $false
 $script:FirstRunPromptActive = $false
 $script:AllowMainClose = $false
 $script:SetupIsUpdate = $false
@@ -705,21 +723,235 @@ function Format-GuiReleaseDate {
 $script:GuiReleaseDate = Get-GuiReleaseDate
 $script:EmbeddedSettingsGearPngBase64 = [string]::Empty
 
-function Save-Settings {
-    $currentList = Get-CurrentListInfo
-    $data = @{
-        ZapretPath       = [string]$script:Root
-        LastStrategy     = if ($script:CmbStrategy) { [string]$script:CmbStrategy.SelectedItem } else { '' }
-        LastList         = if ($currentList) { [string]$currentList.Name } else { '' }
-        RestartAfterEdit = if ($script:ChkRestart) { [bool]$script:ChkRestart.IsChecked } else { $true }
-        HealthIntervalMinutes = [int]$script:HealthIntervalMinutes
-        FirstRunCompleted = [bool]$script:FirstRunCompleted
-        LastZapretUpdateCheck = [string]$script:LastZapretUpdateCheck
-        LastGuiUpdateCheck = [string]$script:LastGuiUpdateCheck
-        DeclinedGuiVersion = [string]$script:DeclinedGuiVersion
-        NotifiedZapretVersion = [string]$script:NotifiedZapretVersion
+function ConvertTo-PlainSettingsTable {
+    param($Obj, [int]$Depth = 0)
+    if ($Depth -gt 16) { return $Obj }
+    if ($null -eq $Obj) { return $null }
+    if ($Obj -is [string] -or $Obj -is [bool] -or $Obj -is [byte] -or $Obj -is [int] -or $Obj -is [long] -or $Obj -is [double] -or $Obj -is [decimal]) {
+        return $Obj
     }
-    $json = $data | ConvertTo-Json
+    if ($Obj -is [datetime]) { return $Obj.ToString('o') }
+    if ($Obj -is [System.Collections.IDictionary]) {
+        $table = [ordered]@{}
+        foreach ($key in $Obj.Keys) {
+            $table[[string]$key] = ConvertTo-PlainSettingsTable -Obj $Obj[$key] -Depth ($Depth + 1)
+        }
+        return $table
+    }
+    if ($Obj -is [System.Collections.IEnumerable]) {
+        $items = [System.Collections.Generic.List[object]]::new()
+        foreach ($one in $Obj) {
+            $items.Add((ConvertTo-PlainSettingsTable -Obj $one -Depth ($Depth + 1)))
+        }
+        return $items.ToArray()
+    }
+    if ($Obj -is [psobject]) {
+        $table = [ordered]@{}
+        foreach ($prop in $Obj.PSObject.Properties) {
+            if ($prop.MemberType -ne 'NoteProperty') { continue }
+            $table[[string]$prop.Name] = ConvertTo-PlainSettingsTable -Obj $prop.Value -Depth ($Depth + 1)
+        }
+        return $table
+    }
+    return $Obj
+}
+
+function Expand-SettingsObject {
+    param($Obj)
+    if ($null -eq $Obj) { return $null }
+    $values = $null
+    try { $values = $Obj.Values } catch { $values = $null }
+    if ($values -and $values -is [psobject] -and -not ($values -is [string])) {
+        foreach ($prop in $values.PSObject.Properties) {
+            if ($prop.MemberType -ne 'NoteProperty') { continue }
+            if ($Obj.PSObject.Properties[[string]$prop.Name]) { continue }
+            $Obj | Add-Member -NotePropertyName ([string]$prop.Name) -NotePropertyValue $prop.Value -Force
+        }
+    }
+    return $Obj
+}
+
+function Add-SettingsCandidate {
+    param(
+        [System.Collections.Generic.List[string]]$List,
+        [string]$Path
+    )
+    if (-not $List -or [string]::IsNullOrWhiteSpace($Path)) { return }
+    foreach ($existing in $List) {
+        if ([string]::Equals($existing, $Path, [StringComparison]::OrdinalIgnoreCase)) { return }
+    }
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        $List.Add($Path)
+    }
+}
+
+function Get-LegacySettingsCandidatePaths {
+    $list = [System.Collections.Generic.List[string]]::new()
+    $appDataDir = Join-Path $env:APPDATA 'ZapretGUI'
+    $localDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'ZapretGUI' } else { '' }
+    $tempDir = if ($env:TEMP) { Join-Path $env:TEMP 'ZapretGUI' } else { '' }
+    Add-SettingsCandidate -List $list -Path (Join-Path $appDataDir 'settings.json')
+    Add-SettingsCandidate -List $list -Path (Join-Path $appDataDir 'zapret-gui.settings.json')
+    if ($localDir) {
+        Add-SettingsCandidate -List $list -Path (Join-Path $localDir 'settings.json')
+        Add-SettingsCandidate -List $list -Path (Join-Path $localDir 'zapret-gui.settings.json')
+    }
+    if ($tempDir) {
+        Add-SettingsCandidate -List $list -Path (Join-Path $tempDir 'settings.json')
+        Add-SettingsCandidate -List $list -Path (Join-Path $tempDir 'zapret-gui.settings.json')
+    }
+    if ($script:AppDir) {
+        Add-SettingsCandidate -List $list -Path (Join-Path $script:AppDir 'zapret-gui.settings.json')
+        Add-SettingsCandidate -List $list -Path (Join-Path $script:AppDir 'settings.json')
+        $parent = Split-Path -Parent $script:AppDir
+        if ($parent -and (Test-Path -LiteralPath $parent -PathType Container)) {
+            try {
+                $siblingDirs = [string[]][IO.Directory]::GetDirectories($parent, 'ZapretGUI-*')
+                foreach ($sibling in $siblingDirs) {
+                    Add-SettingsCandidate -List $list -Path (Join-Path $sibling 'zapret-gui.settings.json')
+                    Add-SettingsCandidate -List $list -Path (Join-Path $sibling 'settings.json')
+                }
+            } catch { }
+        }
+    }
+    try {
+        $run = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name $script:GuiAutostartRunName -ErrorAction SilentlyContinue
+        $cmd = ''
+        if ($run) {
+            $prop = $run.PSObject.Properties[$script:GuiAutostartRunName]
+            if ($prop) { $cmd = [string]$prop.Value }
+        }
+        if ($cmd -match '^"([^"]+)"') {
+            $exeDir = [IO.Path]::GetDirectoryName($Matches[1])
+            if ($exeDir) {
+                Add-SettingsCandidate -List $list -Path (Join-Path $exeDir 'zapret-gui.settings.json')
+                Add-SettingsCandidate -List $list -Path (Join-Path $exeDir 'settings.json')
+            }
+        }
+    } catch { }
+    return $list.ToArray()
+}
+
+function Test-SettingsJsonFile {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    try {
+        $parsed = [IO.File]::ReadAllText($Path) | ConvertFrom-Json
+        return ($null -ne $parsed)
+    } catch {
+        return $false
+    }
+}
+
+function Write-GuiSettingsPointer {
+    param([string]$SettingsFile)
+    try {
+        $dir = Get-GuiStateDirectory
+        $pointer = Join-Path $dir 'settings.path'
+        $text = @(
+            [string]$SettingsFile
+            ('GuiVersion={0}' -f [string]$script:GuiVersion)
+            ('SchemaVersion={0}' -f [int]$script:SettingsSchemaVersion)
+            ('SavedAt={0}' -f (Get-Date).ToString('o'))
+        ) -join [Environment]::NewLine
+        [IO.File]::WriteAllText($pointer, $text, [Text.UTF8Encoding]::new($false))
+    } catch { }
+}
+
+function Update-SettingsSchema {
+    if (-not $script:SettingsBag) { $script:SettingsBag = [ordered]@{} }
+    $ver = 0
+    try { $ver = [int]$script:SettingsBag['SchemaVersion'] } catch { $ver = 0 }
+    if ($ver -lt 1) { $script:SettingsBag['SchemaVersion'] = 1 }
+}
+
+function Initialize-GuiSettingsStore {
+    $canonical = Join-Path (Get-GuiStateDirectory) 'settings.json'
+    $script:SettingsPath = $canonical
+    $best = $null
+    $bestTime = [datetime]::MinValue
+    $candidates = Get-LegacySettingsCandidatePaths
+    foreach ($path in $candidates) {
+        if ([string]::Equals($path, $canonical, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (-not (Test-SettingsJsonFile $path)) { continue }
+        try {
+            $stamp = [IO.File]::GetLastWriteTime($path)
+            if ($stamp -ge $bestTime) {
+                $bestTime = $stamp
+                $best = $path
+            }
+        } catch { }
+    }
+    $haveCanonical = Test-SettingsJsonFile $canonical
+    if (-not $haveCanonical -and $best) {
+        try {
+            [IO.File]::Copy($best, $canonical, $true)
+            $script:SettingsMigratedFrom = $best
+        } catch {
+            $script:SettingsPath = $best
+        }
+    }
+    $script:SettingsExistedAtStartup = Test-SettingsJsonFile $script:SettingsPath
+    $loaded = Get-Settings
+    if ($script:SettingsMigratedFrom -and $script:SettingsBag) {
+        $script:SettingsBag['MigratedFrom'] = [string]$script:SettingsMigratedFrom
+        $script:SettingsBag['MigratedAt'] = (Get-Date).ToString('o')
+    }
+    Update-SettingsSchema
+    Write-GuiSettingsPointer -SettingsFile $script:SettingsPath
+    $sidecar = Join-Path $script:AppDir 'zapret-gui.settings.json'
+    if ($script:AppDir -and (Test-Path -LiteralPath $sidecar) -and -not [string]::Equals($sidecar, $script:SettingsPath, [StringComparison]::OrdinalIgnoreCase)) {
+        if (Test-SettingsJsonFile $script:SettingsPath) {
+            try { Remove-Item -LiteralPath $sidecar -Force -ErrorAction SilentlyContinue } catch { }
+        }
+    }
+}
+
+function Save-Settings {
+    if ([string]::IsNullOrWhiteSpace($script:SettingsPath)) {
+        $script:SettingsPath = Join-Path (Get-GuiStateDirectory) 'settings.json'
+    }
+    if (-not $script:SettingsBag) { $script:SettingsBag = [ordered]@{} }
+    $table = $script:SettingsBag
+    if ($table -isnot [System.Collections.IDictionary]) { $table = [ordered]@{} }
+    Update-SettingsSchema
+    $table['SchemaVersion'] = [int]$script:SettingsSchemaVersion
+    $table['GuiVersion'] = [string]$script:GuiVersion
+    $table['SavedAt'] = (Get-Date).ToString('o')
+    if (-not [string]::IsNullOrWhiteSpace($script:Root)) {
+        $table['ZapretPath'] = [string]$script:Root
+    } elseif (-not $table.Contains('ZapretPath')) {
+        $table['ZapretPath'] = ''
+    }
+    if ($script:CmbStrategy) {
+        $table['LastStrategy'] = [string]$script:CmbStrategy.SelectedItem
+    } elseif (-not $table.Contains('LastStrategy')) {
+        $table['LastStrategy'] = ''
+    }
+    $currentList = $null
+    try { $currentList = Get-CurrentListInfo } catch { $currentList = $null }
+    if ($currentList) {
+        $table['LastList'] = [string]$currentList.Name
+    } elseif (-not $table.Contains('LastList')) {
+        $table['LastList'] = ''
+    }
+    if ($script:ChkRestart) {
+        $table['RestartAfterEdit'] = [bool]$script:ChkRestart.IsChecked
+    } elseif (-not $table.Contains('RestartAfterEdit')) {
+        $table['RestartAfterEdit'] = $true
+    }
+    $table['HealthIntervalMinutes'] = [int]$script:HealthIntervalMinutes
+    $table['CustomHealthHosts'] = $(if ($script:CustomHealthHosts -and $script:CustomHealthHosts.Count -gt 0) { $script:CustomHealthHosts -join "`n" } else { '' })
+    $table['FirstRunCompleted'] = [bool]$script:FirstRunCompleted
+    $table['LastZapretUpdateCheck'] = [string]$script:LastZapretUpdateCheck
+    $table['LastGuiUpdateCheck'] = [string]$script:LastGuiUpdateCheck
+    $table['DeclinedGuiVersion'] = [string]$script:DeclinedGuiVersion
+    $table['NotifiedZapretVersion'] = [string]$script:NotifiedZapretVersion
+    if ($script:SettingsMigratedFrom -and -not $table.Contains('MigratedFrom')) {
+        $table['MigratedFrom'] = [string]$script:SettingsMigratedFrom
+    }
+    $script:SettingsBag = $table
+    $json = $table | ConvertTo-Json -Depth 16
     $enc = [System.Text.UTF8Encoding]::new($false)
     $settingsDir = Split-Path -Parent $script:SettingsPath
     if ($settingsDir -and -not (Test-Path -LiteralPath $settingsDir)) {
@@ -739,11 +971,35 @@ function Save-Settings {
     } else {
         [IO.File]::Move($tempPath, $script:SettingsPath)
     }
+    Write-GuiSettingsPointer -SettingsFile $script:SettingsPath
 }
 
 function Get-Settings {
-    if (-not (Test-Path -LiteralPath $script:SettingsPath)) { return $null }
-    try { return Get-Content -LiteralPath $script:SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $null }
+    if ([string]::IsNullOrWhiteSpace($script:SettingsPath) -or -not (Test-Path -LiteralPath $script:SettingsPath)) {
+        return $null
+    }
+    try {
+        $obj = Expand-SettingsObject ([IO.File]::ReadAllText($script:SettingsPath) | ConvertFrom-Json)
+        $bag = ConvertTo-PlainSettingsTable -Obj $obj
+        if ($bag -is [System.Collections.IDictionary]) {
+            $script:SettingsBag = $bag
+            if ($script:SettingsBag.Contains('Values') -and $script:SettingsBag['Values'] -is [System.Collections.IDictionary]) {
+                $inner = $script:SettingsBag['Values']
+                foreach ($key in $inner.Keys) {
+                    $name = [string]$key
+                    if (-not $script:SettingsBag.Contains($name)) {
+                        $script:SettingsBag[$name] = $inner[$key]
+                    }
+                }
+            }
+        } else {
+            $script:SettingsBag = [ordered]@{}
+        }
+        Update-SettingsSchema
+        return $obj
+    } catch {
+        return $null
+    }
 }
 
 function Write-Utf8Lines {
@@ -762,6 +1018,12 @@ function Add-Log {
         [string]$Color = '#B5BAC1'
     )
     $script:LogQueue.Enqueue([pscustomobject]@{ Message = $Message; Color = $Color; Time = (Get-Date) })
+}
+
+Initialize-GuiSettingsStore
+$script:FirstRunCompleted = $script:SettingsExistedAtStartup
+if ($script:SettingsMigratedFrom) {
+    Add-Log "Настройки перенесены в AppData из $($script:SettingsMigratedFrom)" '#8B9BB4'
 }
 
 function Get-GuiAutostartCommand {
@@ -896,6 +1158,7 @@ function Flush-LogQueue {
         $p.Margin = [Windows.Thickness]::new(0)
         $p.Inlines.Add($run)
         $script:LogBox.Document.Blocks.Add($p)
+        Append-GuiSessionLog -Time $item.Time -Message $item.Message
         $n++
     }
     if ($n -gt 0) {
@@ -903,6 +1166,161 @@ function Flush-LogQueue {
             $script:LogBox.Document.Blocks.Remove($script:LogBox.Document.Blocks.FirstBlock)
         }
         $script:LogBox.ScrollToEnd()
+    }
+}
+
+function Get-GuiLogDirectory {
+    return (Get-GuiStateDirectory)
+}
+
+function Get-GuiSessionLogPath {
+    return (Join-Path (Get-GuiLogDirectory) 'gui.log')
+}
+
+function Get-GuiCrashLogPath {
+    return (Join-Path (Get-GuiLogDirectory) 'crash.log')
+}
+
+function Append-GuiSessionLog {
+    param([datetime]$Time, [string]$Message)
+    try {
+        $line = '{0}  {1}' -f $Time.ToString('yyyy-MM-dd HH:mm:ss'), $Message
+        $path = Get-GuiSessionLogPath
+        [IO.File]::AppendAllText($path, $line + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+        $info = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
+        if ($info -and $info.Length -gt 256KB) {
+            $text = [IO.File]::ReadAllText($path)
+            $keep = $text.Substring([Math]::Max(0, $text.Length - 128KB))
+            $cut = $keep.IndexOf([Environment]::NewLine)
+            if ($cut -ge 0) { $keep = $keep.Substring($cut + [Environment]::NewLine.Length) }
+            [IO.File]::WriteAllText($path, $keep, [Text.UTF8Encoding]::new($false))
+        }
+    } catch { }
+}
+
+function Get-BugReportBody {
+    Flush-LogQueue
+    $nl = [Environment]::NewLine
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('ZAPRET GUI — отчёт об ошибке')
+    $lines.Add(('Время: {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')))
+    $lines.Add(('GUI: {0}' -f [string]$script:GuiVersion))
+    $lines.Add(('Дата выпуска GUI: {0}' -f [string]$script:GuiReleaseDate))
+    $lines.Add(('zapret: {0}' -f $(if ($script:Version) { $script:Version } else { '—' })))
+    $lines.Add(('Папка zapret: {0}' -f $(if ($script:Root) { $script:Root } else { '—' })))
+    $lines.Add(('Программа: {0}' -f [string]$script:OwnPath))
+    $lines.Add(('Windows: {0}' -f [string][Environment]::OSVersion.VersionString))
+    $lines.Add(('64-bit OS: {0}' -f [Environment]::Is64BitOperatingSystem))
+    $lines.Add('')
+    $lines.Add('--- Лог сессии ---')
+    $uiLog = ''
+    if ($script:LogBox) {
+        $range = New-Object Windows.Documents.TextRange($script:LogBox.Document.ContentStart, $script:LogBox.Document.ContentEnd)
+        $uiLog = [string]$range.Text
+    }
+    if ([string]::IsNullOrWhiteSpace($uiLog)) {
+        $sessionPath = Get-GuiSessionLogPath
+        if (Test-Path -LiteralPath $sessionPath) {
+            $uiLog = [IO.File]::ReadAllText($sessionPath)
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($uiLog)) {
+        $lines.Add('(лог пуст)')
+    } else {
+        $lines.Add($uiLog.TrimEnd())
+    }
+    $crashPath = Get-GuiCrashLogPath
+    if (Test-Path -LiteralPath $crashPath) {
+        $lines.Add('')
+        $lines.Add('--- crash.log ---')
+        $lines.Add(([IO.File]::ReadAllText($crashPath)).TrimEnd())
+    }
+    return ($lines -join $nl)
+}
+
+function Copy-TextToClipboard {
+    param([string]$Text)
+    try {
+        [Windows.Clipboard]::SetText([string]$Text)
+        return $true
+    } catch {
+        try {
+            [System.Windows.Forms.Clipboard]::SetText([string]$Text)
+            return $true
+        } catch {
+            return $false
+        }
+    }
+}
+
+function Open-BugReportGithub {
+    param([string]$ReportPath, [string]$ReportText)
+    $copied = Copy-TextToClipboard -Text $ReportText
+    $title = 'ZAPRET GUI {0} — ошибка' -f [string]$script:GuiVersion
+    $bodyLines = New-Object System.Collections.Generic.List[string]
+    $bodyLines.Add('## Что случилось')
+    $bodyLines.Add('')
+    $bodyLines.Add('(кратко опишите, что произошло)')
+    $bodyLines.Add('')
+    $bodyLines.Add('## Среда')
+    $bodyLines.Add('')
+    $bodyLines.Add(('- GUI: {0}' -f [string]$script:GuiVersion))
+    $bodyLines.Add(('- zapret: {0}' -f $(if ($script:Version) { $script:Version } else { '—' })))
+    $bodyLines.Add('')
+    $bodyLines.Add('## Лог')
+    $bodyLines.Add('')
+    if ($copied) {
+        $bodyLines.Add('Полный лог уже в буфере обмена — вставьте его сюда (Ctrl+V).')
+    } else {
+        $bodyLines.Add('Вставьте сюда содержимое файла лога.')
+    }
+    $bodyLines.Add('')
+    $bodyLines.Add(('Файл: `{0}`' -f $ReportPath))
+    $body = $bodyLines -join "`n"
+    $url = '{0}?labels={1}&title={2}&body={3}' -f `
+        $script:GuiGithubIssuesNewUrl, `
+        [Uri]::EscapeDataString('bug'), `
+        [Uri]::EscapeDataString($title), `
+        [Uri]::EscapeDataString($body)
+    $started = $false
+    try {
+        Start-Process $url
+        $started = $true
+    } catch { }
+    if (-not $started) {
+        try {
+            Start-Process $script:GuiGithubIssuesNewUrl
+            $started = $true
+        } catch { }
+    }
+    return $started
+}
+
+function Send-BugReport {
+    param([switch]$SkipConfirm)
+    if (-not $SkipConfirm) {
+        $ask = Show-ZapretDialog -Title 'Сообщить об ошибке' -Buttons 'YesNo' -Message "Открыть GitHub с логом ошибки?`n`nЛог скопируется в буфер обмена. Опишите, что случилось, вставьте лог (Ctrl+V) и нажмите «Submit new issue». Нужен бесплатный вход в GitHub."
+        if ($ask -ne 'Yes') { return }
+    }
+    try {
+        Flush-LogQueue
+        $text = Get-BugReportBody
+        $dir = Join-Path ([IO.Path]::GetTempPath()) 'zapret-gui-bug'
+        if (-not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+        $reportPath = Join-Path $dir ('zapret-gui-log-{0}.txt' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        [IO.File]::WriteAllText($reportPath, $text, [Text.UTF8Encoding]::new($true))
+        $opened = Open-BugReportGithub -ReportPath $reportPath -ReportText $text
+        if ($opened) {
+            Add-Log "Баг-репорт: GitHub Issues, лог $reportPath" '#5865F2'
+        } else {
+            Add-Log "Не удалось открыть GitHub. Лог сохранён: $reportPath" '#E8C36A'
+            $failDlg = Show-ZapretDialog -Title 'Сообщить об ошибке' -Buttons 'OK' -Message "Не удалось открыть браузер.`nЛог сохранён:`n$reportPath`n`nСоздайте issue вручную:`n$($script:GuiGithubIssuesNewUrl)"
+        }
+    } catch {
+        Add-Log "Баг-репорт: $($_.Exception.Message)" '#F23F42'
+        $errDlg = Show-ZapretDialog -Title 'Сообщить об ошибке' -Buttons 'OK' -Message $_.Exception.Message
     }
 }
 
@@ -1906,13 +2324,34 @@ function Update-BusyOverlayFromState {
 }
 
 function Save-SettingsSafe {
-    try {
-        Save-Settings
-    } catch {
-        $dir = Join-Path $env:APPDATA 'ZapretGUI'
-        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-        $script:SettingsPath = Join-Path $dir 'settings.json'
-        Save-Settings
+    $paths = [System.Collections.Generic.List[string]]::new()
+    if ($script:SettingsPath) { $paths.Add([string]$script:SettingsPath) }
+    $paths.Add((Join-Path (Get-GuiStateDirectory) 'settings.json'))
+    if ($env:LOCALAPPDATA) {
+        $paths.Add((Join-Path (Get-GuiStateDirectory -Root $env:LOCALAPPDATA) 'settings.json'))
+    }
+    if ($env:TEMP) {
+        $paths.Add((Join-Path (Get-GuiStateDirectory -Root $env:TEMP) 'settings.json'))
+    }
+    $seen = [System.Collections.Generic.List[string]]::new()
+    $lastError = $null
+    foreach ($path in $paths) {
+        $dup = $false
+        foreach ($prev in $seen) {
+            if ([string]::Equals($prev, $path, [StringComparison]::OrdinalIgnoreCase)) { $dup = $true; break }
+        }
+        if ($dup) { continue }
+        $seen.Add($path)
+        try {
+            $script:SettingsPath = $path
+            Save-Settings
+            return
+        } catch {
+            $lastError = $_
+        }
+    }
+    if ($lastError) {
+        Add-Log "Не удалось сохранить настройки: $($lastError.Exception.Message)" '#F23F42'
     }
 }
 
@@ -2339,6 +2778,170 @@ function Restart-ZapretIfNeeded {
     }
 }
 
+function ConvertTo-CustomHealthTarget {
+    param([string]$Raw)
+    $s = [string]$Raw
+    if ([string]::IsNullOrWhiteSpace($s)) { return $null }
+    $s = $s.Trim()
+    if ($s -match '\s') { $s = ($s -split '\s+', 2)[0] }
+    if ($s -match '^(javascript|file|data):') { return $null }
+    $url = $s
+    if ($url -notmatch '^[a-z][a-z0-9+.-]*://') {
+        $url = "https://$url"
+    }
+    try {
+        $uri = [Uri]::new($url)
+        if (-not $uri.IsAbsoluteUri) { return $null }
+        if ($uri.Scheme -ne 'http' -and $uri.Scheme -ne 'https') { return $null }
+        if ([string]::IsNullOrWhiteSpace($uri.Host)) { return $null }
+        if (-not [string]::IsNullOrWhiteSpace($uri.UserInfo)) { return $null }
+        $ping = $uri.Host
+        if (-not $uri.IsDefaultPort) { $ping = '{0}:{1}' -f $uri.Host, $uri.Port }
+        $abs = $uri.GetLeftPart([UriPartial]::Path)
+        if ($abs.EndsWith('/') -and $uri.AbsolutePath -eq '/') {
+            $abs = $abs.TrimEnd('/')
+        }
+        return [pscustomobject]@{
+            Name = ('Custom:{0}' -f $abs)
+            Url  = $abs
+            Ping = $ping
+        }
+    } catch {
+        return $null
+    }
+}
+
+function Get-CustomHealthTargets {
+    $list = [System.Collections.Generic.List[object]]::new()
+    if ($script:CustomHealthHosts) {
+        foreach ($h in $script:CustomHealthHosts) {
+            $t = ConvertTo-CustomHealthTarget $h
+            if ($t) { $list.Add($t) }
+        }
+    }
+    return $list.ToArray()
+}
+
+function Import-CustomHealthHosts {
+    param($Raw)
+    if ($script:CustomHealthHosts) {
+        $script:CustomHealthHosts.Clear()
+    } else {
+        $script:CustomHealthHosts = [System.Collections.Generic.List[string]]::new()
+    }
+    if ($null -eq $Raw) { return }
+    $items = [System.Collections.Generic.List[string]]::new()
+    if ($Raw -is [string]) {
+        foreach ($line in ([string]$Raw -split '\r?\n')) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) { $items.Add($line.Trim()) }
+        }
+    } else {
+        foreach ($one in $Raw) {
+            $s = [string]$one
+            if (-not [string]::IsNullOrWhiteSpace($s)) { $items.Add($s.Trim()) }
+        }
+    }
+    foreach ($item in $items) {
+        $url = $null
+        $t = ConvertTo-CustomHealthTarget $item
+        if ($t) { $url = [string]$t.Url }
+        if (-not $url) { continue }
+        $dup = $false
+        foreach ($h in $script:CustomHealthHosts) {
+            if ([string]::Equals($h, $url, [StringComparison]::OrdinalIgnoreCase)) { $dup = $true; break }
+        }
+        if (-not $dup) { $script:CustomHealthHosts.Add($url) }
+    }
+}
+
+function Refresh-CustomHealthListBox {
+    if (-not $script:LstCustomHealth) { return }
+    $script:LstCustomHealth.Items.Clear()
+    if (-not $script:CustomHealthHosts) { return }
+    foreach ($h in $script:CustomHealthHosts) {
+        $added = $script:LstCustomHealth.Items.Add($h)
+    }
+}
+
+function Update-CustomHealthColumn {
+    $n = 0
+    if ($script:CustomHealthHosts) { $n = [int]$script:CustomHealthHosts.Count }
+    $show = $n -gt 0
+    if ($script:CardCustom) {
+        $script:CardCustom.Visibility = if ($show) {
+            [Windows.Visibility]::Visible
+        } else {
+            [Windows.Visibility]::Collapsed
+        }
+        $parent = $script:CardCustom.Parent
+        if ($parent -is [Windows.Controls.Grid] -and $parent.ColumnDefinitions.Count -ge 5) {
+            $parent.ColumnDefinitions[3].Width = if ($show) {
+                [Windows.GridLength]::new(12)
+            } else {
+                [Windows.GridLength]::new(0)
+            }
+            $parent.ColumnDefinitions[4].Width = if ($show) {
+                [Windows.GridLength]::new(1, [Windows.GridUnitType]::Star)
+            } else {
+                [Windows.GridLength]::new(0)
+            }
+        }
+    }
+    if ($script:ColHealthCustomGap) {
+        $script:ColHealthCustomGap.Width = if ($show) {
+            [Windows.GridLength]::new(12)
+        } else {
+            [Windows.GridLength]::new(0)
+        }
+    }
+    if ($script:ColHealthCustom) {
+        $script:ColHealthCustom.Width = if ($show) {
+            [Windows.GridLength]::new(1, [Windows.GridUnitType]::Star)
+        } else {
+            [Windows.GridLength]::new(0)
+        }
+    }
+}
+
+function Add-CustomHealthHost {
+    param([string]$Raw)
+    $t = ConvertTo-CustomHealthTarget $Raw
+    if (-not $t) { throw 'Укажите сайт или сервер: example.com или https://example.com' }
+    $url = [string]$t.Url
+    foreach ($h in $script:CustomHealthHosts) {
+        if ([string]::Equals($h, $url, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Этот адрес уже в опросе: $url"
+        }
+    }
+    if ($script:CustomHealthHosts.Count -ge 20) { throw 'Можно добавить не больше 20 адресов' }
+    $script:CustomHealthHosts.Add($url)
+    Refresh-CustomHealthListBox
+    Update-CustomHealthColumn
+    Save-SettingsSafe
+    Add-Log "Опрос своего адреса: $url" '#5865F2'
+    Start-LiveHealthCheck -Force
+}
+
+function Remove-SelectedCustomHealthHost {
+    if (-not $script:LstCustomHealth) { return }
+    $sel = [string]$script:LstCustomHealth.SelectedItem
+    if ([string]::IsNullOrWhiteSpace($sel)) { return }
+    $idx = -1
+    for ($i = 0; $i -lt $script:CustomHealthHosts.Count; $i++) {
+        if ([string]::Equals($script:CustomHealthHosts[$i], $sel, [StringComparison]::OrdinalIgnoreCase)) {
+            $idx = $i
+            break
+        }
+    }
+    if ($idx -lt 0) { return }
+    $script:CustomHealthHosts.RemoveAt($idx)
+    Refresh-CustomHealthListBox
+    Update-CustomHealthColumn
+    Save-SettingsSafe
+    Add-Log "Адрес убран из опроса: $sel" '#8B9BB4'
+    Start-LiveHealthCheck -Force
+}
+
 function Get-DefaultTargets {
     $file = Join-Path $script:Utils 'targets.txt'
     $map = [System.Collections.Specialized.OrderedDictionary]::new()
@@ -2388,7 +2991,8 @@ function Get-LiveCheckTargets {
             [pscustomobject]@{ Name = 'YouTubeVideoRedirect'; Url = 'https://redirector.googlevideo.com'; Ping = 'redirector.googlevideo.com' }
         )
     }
-    return @{ Discord = $discord; Youtube = $youtube }
+    $custom = Get-CustomHealthTargets
+    return @{ Discord = $discord; Youtube = $youtube; Custom = $custom }
 }
 
 function Get-TargetLabel {
@@ -2402,6 +3006,7 @@ function Get-TargetLabel {
         'YouTubeShort' { return 'youtu.be' }
         'Image' { return 'Превью' }
         'Video|googlevideo' { return 'Видео' }
+        '^Custom:' { return $HostName }
         default { return $HostName }
     }
 }
@@ -2459,6 +3064,14 @@ function Show-HealthPlaceholders {
             Ok = $false; Status = 'проверка...'; Color = '#80848E'
         })
     }
+    if ($targets.Custom) {
+        foreach ($t in $targets.Custom) {
+            $rows.Add([pscustomobject]@{
+                Group = 'Custom'; Name = $t.Name; Host = $t.Ping; Label = (Get-TargetLabel $t.Name $t.Ping)
+                Ok = $false; Status = 'проверка...'; Color = '#80848E'
+            })
+        }
+    }
     $script:HealthResults = $rows
     Update-HealthPanels $rows
 }
@@ -2466,15 +3079,22 @@ function Show-HealthPlaceholders {
 function Update-HealthPanels {
     param($Results)
     if (-not $script:PnlDiscord) { return }
+    Update-CustomHealthColumn
     $script:PnlDiscord.Children.Clear()
     $script:PnlYoutube.Children.Clear()
-    $dOk = 0; $dN = 0; $yOk = 0; $yN = 0
+    if ($script:PnlCustom) { $script:PnlCustom.Children.Clear() }
+    $dOk = 0; $dN = 0; $yOk = 0; $yN = 0; $cOk = 0; $cN = 0
     foreach ($item in $Results) {
         try {
             $row = New-HealthRow $item
             if ($item.Group -eq 'Discord') {
                 $script:PnlDiscord.Children.Insert($script:PnlDiscord.Children.Count, $row)
                 $dN++; if ($item.Ok) { $dOk++ }
+            } elseif ($item.Group -eq 'Custom') {
+                if ($script:PnlCustom) {
+                    $script:PnlCustom.Children.Insert($script:PnlCustom.Children.Count, $row)
+                }
+                $cN++; if ($item.Ok) { $cOk++ }
             } else {
                 $script:PnlYoutube.Children.Insert($script:PnlYoutube.Children.Count, $row)
                 $yN++; if ($item.Ok) { $yOk++ }
@@ -2485,6 +3105,7 @@ function Update-HealthPanels {
     }
     if ($script:LblDiscordSummary) { $script:LblDiscordSummary.Text = if ($dN) { "$dOk/$dN" } else { '' } }
     if ($script:LblYoutubeSummary) { $script:LblYoutubeSummary.Text = if ($yN) { "$yOk/$yN" } else { '' } }
+    if ($script:LblCustomSummary) { $script:LblCustomSummary.Text = if ($cN) { "$cOk/$cN" } else { '' } }
 }
 
 function Start-LiveHealthCheck {
@@ -2508,7 +3129,7 @@ function Start-LiveHealthCheck {
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
     $healthPipeline = $ps.AddScript({
-        param($Discord, $Youtube, $Queue)
+        param($Discord, $Youtube, $Custom, $Queue)
         function CheckOne($t, $group) {
             $ok = $false
             $code = '000'
@@ -2529,8 +3150,9 @@ function Start-LiveHealthCheck {
         }
         foreach ($t in @($Discord)) { CheckOne $t 'Discord' }
         foreach ($t in @($Youtube)) { CheckOne $t 'Youtube' }
+        foreach ($t in @($Custom)) { if ($t) { CheckOne $t 'Custom' } }
         $Queue.Enqueue([pscustomobject]@{ Done = $true })
-    }).AddArgument(@($targets.Discord)).AddArgument(@($targets.Youtube)).AddArgument($queue)
+    }).AddArgument(@($targets.Discord)).AddArgument(@($targets.Youtube)).AddArgument($targets.Custom).AddArgument($queue)
     $script:HealthPs = $ps
     $script:HealthRs = $rs
     $script:HealthHandle = $ps.BeginInvoke()
@@ -3661,7 +4283,7 @@ $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="ZAPRET"
-        Width="820" Height="640" MinWidth="760" MinHeight="600"
+        Width="900" Height="640" MinWidth="800" MinHeight="600"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None" ResizeMode="CanResize"
         AllowsTransparency="False" BorderThickness="0"
@@ -3824,6 +4446,9 @@ $xaml = @'
             </Grid>
           </Viewbox>
         </Button>
+        <Button x:Name="BtnBugReport" ToolTip="Сообщить об ошибке" Style="{StaticResource Btn}" Width="36" Height="36" Margin="0,10,0,0" Padding="0" Background="#2B2D31">
+          <TextBlock FontFamily="Segoe UI Emoji" Text="🐞" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Button>
       </StackPanel>
     </Border>
 
@@ -3865,6 +4490,8 @@ $xaml = @'
           <ColumnDefinition Width="*"/>
           <ColumnDefinition Width="12"/>
           <ColumnDefinition Width="*"/>
+          <ColumnDefinition x:Name="ColHealthCustomGap" Width="0"/>
+          <ColumnDefinition x:Name="ColHealthCustom" Width="0"/>
         </Grid.ColumnDefinitions>
         <Border x:Name="CardDiscord" Grid.Column="0" Background="#2B2D31" CornerRadius="8" Padding="16" Cursor="Hand" ToolTip="Нажмите, чтобы проверить сейчас">
           <DockPanel>
@@ -3884,6 +4511,16 @@ $xaml = @'
               <TextBlock x:Name="LblYoutubeSummary" Text="" Foreground="#DCDDDE" FontSize="12" Margin="8,0,0,0" VerticalAlignment="Center"/>
             </StackPanel>
             <StackPanel x:Name="PnlYoutube"/>
+          </DockPanel>
+        </Border>
+        <Border x:Name="CardCustom" Grid.Column="4" Background="#2B2D31" CornerRadius="8" Padding="16" Cursor="Hand" ToolTip="Нажмите, чтобы проверить сейчас" Visibility="Collapsed">
+          <DockPanel>
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+              <Ellipse Width="8" Height="8" Fill="#F0B232" VerticalAlignment="Center" Margin="0,0,8,0"/>
+              <TextBlock Text="СВОИ" FontWeight="Bold" FontSize="12" Foreground="#DCDDDE" VerticalAlignment="Center"/>
+              <TextBlock x:Name="LblCustomSummary" Text="" Foreground="#DCDDDE" FontSize="12" Margin="8,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+            <StackPanel x:Name="PnlCustom"/>
           </DockPanel>
         </Border>
       </Grid>
@@ -4247,18 +4884,49 @@ $xamlSettings = @'
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
           </Grid.RowDefinitions>
-          <TextBlock Text="Списки сайтов" FontSize="16" FontWeight="Bold" Foreground="#F2F3F5" Margin="0,0,0,8"/>
-          <Border Grid.Row="1" Background="#1E1F22" CornerRadius="6" Margin="0,0,0,8" Padding="0,1">
+          <TextBlock Text="Опрос своих адресов" FontSize="16" FontWeight="Bold" Foreground="#F2F3F5" Margin="0,0,0,4"/>
+          <TextBlock Grid.Row="1" TextWrapping="Wrap" Foreground="#949BA4" FontSize="12" Margin="0,0,0,8" Text="Третья колонка на главном окне. Если список пуст — показываются только Discord и YouTube. Это не список zapret."/>
+          <Grid Grid.Row="2" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="8"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Border Background="#1E1F22" CornerRadius="6">
+              <Grid>
+                <TextBlock x:Name="TxtCustomHealthHint" Text="сайт или сервер: example.com" Foreground="#6D6F78" VerticalAlignment="Center" Margin="10,0,0,0" IsHitTestVisible="False"/>
+                <TextBox x:Name="TxtCustomHealth" Background="Transparent" VerticalContentAlignment="Center" ToolTip="Адрес для живой проверки на главном окне"/>
+              </Grid>
+            </Border>
+            <Button x:Name="BtnAddCustomHealth" Grid.Column="2" Content="Добавить" Style="{StaticResource BtnAccent}" Margin="0" Padding="10,5" Width="Auto"/>
+          </Grid>
+          <Grid Grid.Row="3" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="8"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Border Background="#1E1F22" CornerRadius="6" Padding="4" MinHeight="72">
+              <ListBox x:Name="LstCustomHealth" Background="Transparent" Height="72"/>
+            </Border>
+            <Button x:Name="BtnRemoveCustomHealth" Grid.Column="2" Content="Удалить" Style="{StaticResource BtnDanger}" Margin="0" Padding="10,5" Width="Auto" VerticalAlignment="Top"/>
+          </Grid>
+          <TextBlock Grid.Row="4" Text="Списки сайтов" FontSize="16" FontWeight="Bold" Foreground="#F2F3F5" Margin="0,0,0,8"/>
+          <Border Grid.Row="5" Background="#1E1F22" CornerRadius="6" Margin="0,0,0,8" Padding="0,1">
             <ComboBox x:Name="CmbList" Margin="0" Background="#1E1F22" Foreground="#F2F3F5" BorderThickness="0"/>
           </Border>
-          <DockPanel Grid.Row="2" Margin="0,0,0,8">
+          <DockPanel Grid.Row="6" Margin="0,0,0,8">
             <CheckBox x:Name="ChkRestart" Content="Перезапускать после изменения" IsChecked="True" VerticalAlignment="Center"/>
             <TextBlock x:Name="LblListHint" TextWrapping="Wrap" Foreground="#DCDDDE" FontSize="12" Margin="12,0,0,0"/>
           </DockPanel>
-          <Grid Grid.Row="3" Margin="0,0,0,8">
+          <Grid Grid.Row="7" Margin="0,0,0,8">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="8"/>
@@ -4269,10 +4937,10 @@ $xamlSettings = @'
             </Border>
             <Button x:Name="BtnCheckSite" Grid.Column="2" Content="Проверить сайт" Style="{StaticResource Btn}" Margin="0" Padding="10,5" Width="Auto"/>
           </Grid>
-          <Border Grid.Row="4" Background="#2B2D31" CornerRadius="6" Padding="4" Margin="0,0,0,8">
+          <Border Grid.Row="8" Background="#2B2D31" CornerRadius="6" Padding="4" Margin="0,0,0,8">
             <ListBox x:Name="LstSites" Background="Transparent"/>
           </Border>
-          <DockPanel Grid.Row="5">
+          <DockPanel Grid.Row="9">
             <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
               <Button x:Name="BtnRemove" Content="Удалить" Style="{StaticResource BtnDanger}" Margin="0,0,6,0" Padding="10,5" Width="Auto"/>
               <Button x:Name="BtnFolder" Content="Папка lists" Style="{StaticResource Btn}" Margin="0" Padding="10,5" Width="Auto"/>
@@ -4450,16 +5118,16 @@ function Bind-GuiNames {
 }
 Bind-GuiNames $window @(
     'DragMain','BtnMinimizeMain','BtnCloseMain',
-    'BtnSettings','BtnAbout','BtnStart','BtnStop','DotStatus','LblStatus','LblGuiVersion','LblZapretVer','PnlUpdate','LblUpdate','BtnRelease',
+    'BtnSettings','BtnAbout','BtnBugReport','BtnStart','BtnStop','DotStatus','LblStatus','LblGuiVersion','LblZapretVer','PnlUpdate','LblUpdate','BtnRelease',
     'ImgSettingsGear','TxtSettingsGearFallback',
-    'CardDiscord','CardYoutube','PnlDiscord','PnlYoutube','LblDiscordSummary','LblYoutubeSummary','TxtHost','TxtHostHint','BtnAdd','BtnSiteTest',
+    'CardDiscord','CardYoutube','CardCustom','ColHealthCustomGap','ColHealthCustom','PnlDiscord','PnlYoutube','PnlCustom','LblDiscordSummary','LblYoutubeSummary','LblCustomSummary','TxtHost','TxtHostHint','BtnAdd','BtnSiteTest',
     'PnlOverlay','LblOverlayTitle','LblOverlaySub','PrgOverlay','LblOverlayPct','BtnOverlayRetry'
 )
 Bind-GuiNames $script:SettingsWindow @(
     'DragSettings','BtnMinimizeSettings','BtnCloseSettings',
     'TxtPath','BtnBrowse','BtnScan','CmbStrategy','BtnRestart','BtnInstallService','BtnRemoveService',
     'BtnAutoBest','BtnTestCurrent','BtnTestAll','BtnCancelTest','BtnSiteTestSettings','BtnOfficialTest','LblStrategies','LblMode',
-    'TxtHealthInterval',
+    'TxtHealthInterval','TxtCustomHealth','TxtCustomHealthHint','BtnAddCustomHealth','LstCustomHealth','BtnRemoveCustomHealth',
     'CmbList','ChkRestart','LblListHint','TxtCheckHost','LstSites','BtnCheckSite','BtnRemove','BtnFolder','LblCount',
     'BtnLatestReport','BtnCopyLog','BtnClearLog','LogBox'
 )
@@ -4600,11 +5268,17 @@ if ($script:BtnSettings) {
 if ($script:BtnAbout) {
     $script:BtnAbout.Add_Click({ Show-AboutWindow })
 }
+if ($script:BtnBugReport) {
+    $script:BtnBugReport.Add_Click({ Send-BugReport })
+}
 if ($script:CardDiscord) {
     $script:CardDiscord.Add_MouseLeftButtonUp({ Start-LiveHealthCheck -Force })
 }
 if ($script:CardYoutube) {
     $script:CardYoutube.Add_MouseLeftButtonUp({ Start-LiveHealthCheck -Force })
+}
+if ($script:CardCustom) {
+    $script:CardCustom.Add_MouseLeftButtonUp({ Start-LiveHealthCheck -Force })
 }
 $script:BtnBrowse.Add_Click({ Invoke-Browse })
 $script:BtnScan.Add_Click({
@@ -4640,6 +5314,38 @@ if ($script:TxtHealthInterval) {
         param($s, $e)
         if ($e.Key -eq 'Return') {
             Set-HealthIntervalMinutes -Value $script:TxtHealthInterval.Text -Save
+        }
+    })
+}
+function Invoke-AddCustomHealthFromBox {
+    try {
+        $raw = if ($script:TxtCustomHealth) { [string]$script:TxtCustomHealth.Text } else { '' }
+        Add-CustomHealthHost $raw
+        if ($script:TxtCustomHealth) { $script:TxtCustomHealth.Clear() }
+    } catch {
+        Add-Log $_.Exception.Message '#FF8A8A'
+        $warnDlg = Show-ZapretDialog -Title 'Опрос адресов' -Buttons 'OK' -Message $_.Exception.Message
+    }
+}
+if ($script:BtnAddCustomHealth) {
+    $script:BtnAddCustomHealth.Add_Click({ Invoke-AddCustomHealthFromBox })
+}
+if ($script:BtnRemoveCustomHealth) {
+    $script:BtnRemoveCustomHealth.Add_Click({
+        try { Remove-SelectedCustomHealthHost } catch {
+            Add-Log $_.Exception.Message '#FF8A8A'
+        }
+    })
+}
+if ($script:TxtCustomHealth) {
+    $script:TxtCustomHealth.Add_KeyDown({
+        param($s, $e)
+        if ($e.Key -eq 'Return') { Invoke-AddCustomHealthFromBox }
+    })
+    $script:TxtCustomHealth.Add_TextChanged({
+        if ($script:TxtCustomHealthHint) {
+            $has = -not [string]::IsNullOrWhiteSpace($script:TxtCustomHealth.Text)
+            $script:TxtCustomHealthHint.Visibility = if ($has) { 'Collapsed' } else { 'Visible' }
         }
     })
 }
@@ -4870,6 +5576,11 @@ $window.Add_Loaded({
         } else {
             Set-HealthIntervalMinutes -Value $script:HealthIntervalMinutes
         }
+        if ($cfg -and $null -ne $cfg.CustomHealthHosts) {
+            Import-CustomHealthHosts $cfg.CustomHealthHosts
+        }
+        Refresh-CustomHealthListBox
+        Update-CustomHealthColumn
         if ($cfg -and $cfg.NotifiedZapretVersion) {
             $script:NotifiedZapretVersion = [string]$cfg.NotifiedZapretVersion
         }
@@ -5031,12 +5742,8 @@ try {
     }
     $mainLoopDone = [ZapretUiHost]::StartMainLoop()
 } catch {
-    $crashDir = Join-Path $env:APPDATA 'ZapretGUI'
-    $crashPath = Join-Path $crashDir 'crash.log'
+    $crashPath = Get-GuiCrashLogPath
     try {
-        if (-not (Test-Path -LiteralPath $crashDir)) {
-            New-Item -ItemType Directory -Path $crashDir -Force | Out-Null
-        }
         $details = @(
             "Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')"
             "Message: $($_.Exception.Message)"
@@ -5049,6 +5756,10 @@ try {
         [IO.File]::WriteAllText($crashPath, $details, [Text.UTF8Encoding]::new($false))
     } catch { }
     $crashDlg = Show-ZapretDialog -Title 'ZAPRET GUI' -Buttons 'OK' -Message "$($_.Exception.Message)`nПодробности: $crashPath"
+    $sendCrash = Show-ZapretDialog -Title 'Сообщить об ошибке' -Buttons 'YesNo' -Message "Открыть баг-репорт на GitHub с этим сбоем?"
+    if ($sendCrash -eq 'Yes') {
+        try { Send-BugReport -SkipConfirm } catch { }
+    }
 } finally {
     $releasedInstance = [ZapretSingleInstance]::Release()
 }

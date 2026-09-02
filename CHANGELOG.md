@@ -21,6 +21,19 @@ git checkout main
 
 ---
 
+## 1.0.28
+
+- В настройках можно добавить свои сайты/серверы для опроса; третья колонка на главном окне появляется, только если список не пуст
+- Настройки GUI хранятся в `%APPDATA%\ZapretGUI` (подхватываются при обновлении, старый файл рядом с EXE переносится)
+
+## 1.0.27
+
+- Жучок открывает GitHub Issues: лог копируется в буфер, почта не нужна
+
+## 1.0.26
+
+- Кнопка-жучок под «О программе»: лог можно отправить разработчику письмом
+
 ## 1.0.25
 
 - по моему хотенью
@@ -57,6 +70,19 @@ git checkout main
 # English
 
 Tags `vX.Y.Z` snapshot the **whole repo**, not only the packaged EXE. Restore with `git checkout v1.0.20`. The wrapper number in `VERSION` must match the tag.
+
+## 1.0.28
+
+- Settings: custom hosts for the live poll; the third main-window column is shown only when that list is not empty
+- GUI settings live in `%APPDATA%\ZapretGUI` so updates keep the previous config; sidecar files next to the EXE are migrated
+
+## 1.0.27
+
+- Bug-report beetle opens a GitHub issue; the log is copied to the clipboard (no mail client)
+
+## 1.0.26
+
+- Bug-report button under About: send the GUI log to the developer by email
 
 ## 1.0.25
 

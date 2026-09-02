@@ -9,6 +9,10 @@
 [![VirusTotal](https://img.shields.io/badge/VirusTotal-SHA256-394EFF?logo=virustotal&logoColor=white)](https://www.virustotal.com/gui/file/a8046c2ef24cc9b91bec7d1df2425d70872f7376bb31432f00ac4d8a2bc65e09)
 [![Made with Cursor](https://img.shields.io/badge/Made%20with-Cursor-000000?logo=cursor&logoColor=white)](https://cursor.com)
 
+ВСЁ ДЛЯ ТЕБЯЯ, МОРЯ И АКЕАНЫ.
+
+А теперь к делу:
+
 **Форк оригинального [zapret](https://github.com/bol-van/zapret)** с графической оболочкой для Windows. Движок — сборка [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube).
 
 Представляю вашему вниманию визуальный интерфейс (GUI) для всеми любимого zapret. **ZAPRET GUI** — новый мощный, сочный, свежий продукт (как глоток чистого воздуха). Вам больше не придётся вручную заниматься обновлениями: за вас всё сделает программа. Автоматические обновления GUI, автоматическое обновление zapret (с вашего разрешения, конечно) — всё, что может быть автоматически, здесь есть. Даже автотестирование стратегий: лучшая стратегия будет автоматически запущена как служба (никаких лишних окон). Юзай, бро. Миру мир.
@@ -28,6 +32,10 @@
 
 ## Русский
 
+ВСЁ ДЛЯ ТЕБЯЯ, МОРЯ И АКЕАНЫ.
+
+А теперь к делу:
+
 Представляю вашему вниманию визуальный интерфейс (GUI) для всеми любимого zapret. **ZAPRET GUI** — новый мощный, сочный, свежий продукт (как глоток чистого воздуха). Вам больше не придётся вручную заниматься обновлениями: за вас всё сделает программа. Автоматические обновления GUI, автоматическое обновление zapret (с вашего разрешения, конечно) — всё, что может быть автоматически, здесь есть. Даже автотестирование стратегий: лучшая стратегия будет автоматически запущена как служба (никаких лишних окон). Юзай, бро. Миру мир.
 
 Графическая оболочка подключает папку сборки Flowseal, ставит выбранную стратегию службой Windows и показывает, открываются ли Discord и YouTube. Официальные `general*.bat` и `service.bat` программа не меняет.
@@ -38,10 +46,13 @@
 
 - Запуск, стоп и перезапуск службы zapret в один клик
 - Живые карточки Discord и YouTube с задержкой
+- Свои адреса для опроса в настройках (третья колонка на главном окне, если список не пуст)
+- Настройки хранятся в `%APPDATA%\ZapretGUI`, а не рядом с EXE
 - Автоподбор лучшей стратегии и установка её службой
 - Добавление сайтов только в пользовательские списки (`*user*.txt`)
 - Тест своих URL разными стратегиями (кнопка «Тест сайтов»)
 - Кнопка «О программе»: версия, дата выпуска, разработчик и проверка обновления на GitHub
+- Жучок «Сообщить об ошибке»: открывается GitHub Issues, лог копируется в буфер обмена
 - Автопроверка новой версии самой оболочки на GitHub (скачивание с прогрессом и перезапуск)
 - Сворачивание в трей (закрытие окна не выключает обход)
 - Автозапуск Windows по умолчанию: запись в «Автозагрузке» и задача Планировщика без повторного UAC
@@ -56,7 +67,7 @@
 2. Запустите файл и подтвердите UAC. Без прав администратора службу zapret поставить нельзя.
 3. Если Windows покажет SmartScreen: **Подробнее → Выполнить в любом случае**.
 
-Папку zapret программа скачает с GitHub или предложит указать самой. Рядом с EXE ничего класть не обязательно.
+Папку zapret программа скачает с GitHub или предложит указать самой. Рядом с EXE ничего класть не обязательно: настройки лежат в `%APPDATA%\ZapretGUI`.
 
 ### Проверка на вирусы
 
@@ -121,6 +132,10 @@ Get-FileHash .\ZapretGUI.exe -Algorithm SHA256
 
 ## English
 
+ВСЁ ДЛЯ ТЕБЯЯ, МОРЯ И АКЕАНЫ.
+
+А теперь к делу:
+
 A **fork of original [zapret](https://github.com/bol-van/zapret)** with a Windows GUI. The engine is [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube).
 
 Built with [Cursor](https://cursor.com). Python is not required.
@@ -133,10 +148,13 @@ By default the app **registers itself in Windows Startup**. The close button **h
 
 - Start, stop, and restart the zapret service in one click
 - Live Discord and YouTube cards with latency
+- Custom poll hosts in Settings (third main-window column only when the list is not empty)
+- Settings live in `%APPDATA%\ZapretGUI`, not next to the EXE
 - Auto-test strategies and install the best one as a service
 - Add sites only to user lists (`*user*.txt`)
 - Test your own URLs against every strategy (the **Test sites** button)
 - **About** button: wrapper version, release date, developer, and a GitHub update check
+- Bug-report beetle: opens a GitHub issue and copies the log to the clipboard
 - Daily self-update check for the GUI on GitHub (download progress, then restart)
 - Minimize to tray (closing the window does not stop bypass)
 - Windows Startup enabled by default (Task Manager Startup entry plus an elevated scheduled task, no extra UAC at logon)
@@ -151,7 +169,7 @@ No installer.
 2. Run it and accept UAC. Administrator rights are required to install the zapret service.
 3. If SmartScreen appears: **More info → Run anyway**.
 
-The program downloads zapret from GitHub or asks you to pick an existing folder.
+The program downloads zapret from GitHub or asks you to pick an existing folder. Settings are stored in `%APPDATA%\ZapretGUI`.
 
 ### Antivirus checks
 

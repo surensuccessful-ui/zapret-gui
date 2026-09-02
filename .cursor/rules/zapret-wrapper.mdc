@@ -20,5 +20,5 @@ This repo is a **GUI wrapper** around Flowseal `zapret-discord-youtube`. Officia
 - Treat downloaded zapret archives as executable supply-chain input: pin the expected release asset, validate extraction paths, and verify integrity/authenticity when upstream provides a checksum or signature.
 - Discovery is read-only. Never execute `service.bat`, a strategy, or another discovered file merely by scanning/selecting a folder; validate the package and require an explicit user action before the first elevated execution.
 - A valid explicitly saved `ZapretPath` takes precedence over nearby-folder discovery.
-- Treat `zapret-discord-youtube-*` as external runtime data and `zapret-gui.settings.json` as machine-local state: do not edit or commit either. Launch only the root wrapper/packaged EXE, never stale `zapret-gui.*` copies inside a zapret package.
+- Treat `zapret-discord-youtube-*` as external runtime data and `%APPDATA%\ZapretGUI\settings.json` as machine-local state: do not edit or commit either. Launch only the root wrapper/packaged EXE, never stale `zapret-gui.*` copies inside a zapret package.
 - **GitHub is not automatic.** Do not `git push`, create/edit GitHub Releases, or upload EXE/zip to GitHub unless the user explicitly asks in that message. Builds stay in local `dist/`.
