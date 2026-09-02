@@ -1,8 +1,8 @@
 ﻿# ZAPRET GUI
 
-**EN:** A Windows 10/11 GUI wrapper for [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube). It does not patch official strategies. It connects a zapret folder, installs the chosen strategy as a Windows service, and checks Discord and YouTube.
+**EN:** A fork of original [zapret](https://github.com/bol-van/zapret) with a Windows 10/11 GUI. The runtime pack is [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube). This GUI does not patch official strategies: it connects a zapret folder, installs the chosen strategy as a Windows service, and checks Discord and YouTube.
 
-**RU:** Графическая оболочка для сборки [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube). Сама программа не меняет стратегии zapret: она подключает папку zapret, ставит выбранную стратегию как службу Windows и помогает проверить Discord и YouTube.
+**RU:** Форк оригинального [zapret](https://github.com/bol-van/zapret) с графической оболочкой для Windows 10/11. В качестве сборки используется [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube). Сама программа не меняет стратегии zapret: она подключает папку zapret, ставит выбранную стратегию как службу Windows и помогает проверить Discord и YouTube.
 
 Python is not required. / Python не нужен.
 
@@ -26,7 +26,9 @@ Windows SmartScreen может показать предупреждение: ф
 
 ### What this is
 
-ZAPRET GUI is a wrapper only. It never edits `general*.bat`, `service.bat`, or other files inside the zapret package (GitHub updates overwrite those). Extra sites go into zapret **user lists** (`lists\list-general-user.txt` and other `*user*.txt` files).
+ZAPRET GUI is a **fork of original [zapret](https://github.com/bol-van/zapret)** (by bol-van). On Windows it uses the [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) package as the engine.
+
+The GUI itself is a wrapper only. It never edits `general*.bat`, `service.bat`, or other files inside the zapret package (GitHub updates overwrite those). Extra sites go into zapret **user lists** (`lists\list-general-user.txt` and other `*user*.txt` files).
 
 ### Requirements
 
@@ -99,7 +101,9 @@ Do not commit unpacked `zapret-discord-youtube-*` folders or `zapret-gui.setting
 
 ### Что это
 
-Это только оболочка. Она не правит `general*.bat`, `service.bat` и другие файлы пакета zapret (обновления с GitHub их затрут). Сайты добавляются только в **пользовательские списки** zapret (`lists\list-general-user.txt` и другие `*user*.txt`).
+Это **форк оригинального [zapret](https://github.com/bol-van/zapret)** (автор bol-van). На Windows в качестве движка берётся сборка [Flowseal zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube).
+
+Сама GUI — только оболочка. Она не правит `general*.bat`, `service.bat` и другие файлы пакета zapret (обновления с GitHub их затрут). Сайты добавляются только в **пользовательские списки** zapret (`lists\list-general-user.txt` и другие `*user*.txt`).
 
 ### Требования
 
