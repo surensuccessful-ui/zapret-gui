@@ -45,6 +45,7 @@ $script:IsPackaged = [bool]($script:OwnPath -and $script:OwnPath.ToLower().EndsW
 $script:LaunchArgs = @($args | ForEach-Object { [string]$_ })
 $script:StartInTray = $false
 $script:ShowUpdatedNotice = $false
+$script:UiProbe = $false
 $script:GuiAutostartTaskName = 'ZapretGUI'
 $script:GuiAutostartRunName = 'ZAPRET GUI'
 foreach ($launchArg in $script:LaunchArgs) {
@@ -55,6 +56,7 @@ foreach ($launchArg in $script:LaunchArgs) {
         $script:ShowUpdatedNotice = $true
         $script:StartInTray = $false
     }
+    if ($launchArg -eq '-UiProbe') { $script:UiProbe = $true }
 }
 
 function Get-QuotedArgumentString {
@@ -111,7 +113,7 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
 }
 
 $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+if (-not $script:UiProbe -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     if (Start-GuiViaScheduledTask) { exit }
     $psi = New-Object Diagnostics.ProcessStartInfo
     $psi.Verb = 'runas'
@@ -132,12 +134,16 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::
 
 if (-not ('ZapretUiHost' -as [type])) {
     try { Add-Type -AssemblyName System.Xaml } catch { }
+    try { Add-Type -AssemblyName System.Windows.Forms } catch { }
     $wpfRefs = @(
         ([System.Windows.Window].Assembly.Location)
         ([System.Windows.Threading.Dispatcher].Assembly.Location)
         ([System.Windows.Media.Visual].Assembly.Location)
         ([System.Windows.Interop.WindowInteropHelper].Assembly.Location)
     )
+    if ('System.Windows.Forms.FolderBrowserDialog' -as [type]) {
+        $wpfRefs += [System.Windows.Forms.FolderBrowserDialog].Assembly.Location
+    }
     if ('System.Xaml.XamlObjectWriter' -as [type]) {
         $wpfRefs += [System.Xaml.XamlObjectWriter].Assembly.Location
     }
@@ -145,6 +151,7 @@ if (-not ('ZapretUiHost' -as [type])) {
     Add-Type -ReferencedAssemblies $wpfRefs -TypeDefinition @'
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
@@ -164,8 +171,28 @@ public static class ZapretUiHost {
     static Button _aboutUpdate;
     static Button _aboutSkip;
     static string _dialogResult = "Cancel";
+    static volatile bool _exitPosted;
+    static volatile bool _watchPosted;
+    static FileSystemWatcher _pathWatch;
 
     static object Ok() { return true; }
+
+    static Window ForegroundWindow() {
+        if (_settings != null && _settings.IsVisible) return _settings;
+        if (_siteTest != null && _siteTest.IsVisible) return _siteTest;
+        if (_main != null && _main.IsVisible) return _main;
+        return null;
+    }
+
+    static void PlaceDialog(Window dlg) {
+        Window owner = ForegroundWindow();
+        if (owner != null) {
+            dlg.Owner = owner;
+            dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        } else {
+            dlg.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        }
+    }
 
     static Brush HexBrush(string hex) {
         return (Brush)(new BrushConverter().ConvertFrom(hex));
@@ -275,22 +302,8 @@ public static class ZapretUiHost {
             app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         }
         Window dlg = CreateAskWindow(title, body == null ? "" : body, buttons);
-        if (_main != null && _main.IsVisible) {
-            dlg.Owner = _main;
-            dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        } else {
-            dlg.WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        }
-        DispatcherFrame frame = new DispatcherFrame();
-        EventHandler onClosed = null;
-        onClosed = delegate(object s, EventArgs e) {
-            dlg.Closed -= onClosed;
-            frame.Continue = false;
-        };
-        dlg.Closed += onClosed;
-        dlg.Show();
-        dlg.Activate();
-        Dispatcher.PushFrame(frame);
+        PlaceDialog(dlg);
+        dlg.ShowDialog();
         return _dialogResult;
     }
 
@@ -394,26 +407,14 @@ public static class ZapretUiHost {
                 dlg.Close();
             }
         };
-        if (_main != null && _main.IsVisible) {
-            dlg.Owner = _main;
-            dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        } else {
-            dlg.WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        }
-        DispatcherFrame frame = new DispatcherFrame();
-        EventHandler onClosed = null;
-        onClosed = delegate(object s, EventArgs e) {
-            dlg.Closed -= onClosed;
+        PlaceDialog(dlg);
+        dlg.Closed += delegate(object s, EventArgs e) {
             _aboutStatus = null;
             _aboutUpdate = null;
             _aboutSkip = null;
-            frame.Continue = false;
         };
-        dlg.Closed += onClosed;
         SetAboutUpdate(_aboutStatus.Text, canUpdate);
-        dlg.Show();
-        dlg.Activate();
-        Dispatcher.PushFrame(frame);
+        dlg.ShowDialog();
         return _dialogResult;
     }
 
@@ -501,6 +502,13 @@ public static class ZapretUiHost {
         _main.Activate();
         return Ok();
     }
+    public static object QueueShowMain() {
+        if (_main == null) return Ok();
+        _main.Dispatcher.BeginInvoke(new Action(delegate() {
+            ShowMain();
+        }));
+        return Ok();
+    }
     public static object DragMain() {
         if (_main != null) _main.DragMove();
         return Ok();
@@ -555,6 +563,75 @@ public static class ZapretUiHost {
         if (_siteTest != null) _siteTest.DragMove();
         return Ok();
     }
+    public static object SettingsIsVisible() {
+        return _settings != null && _settings.IsVisible;
+    }
+    public static object SiteTestIsVisible() {
+        return _siteTest != null && _siteTest.IsVisible;
+    }
+    public static object PickFolder(string description, string selectedPath) {
+        System.Windows.Forms.FolderBrowserDialog dialog = new System.Windows.Forms.FolderBrowserDialog();
+        dialog.Description = description ?? "";
+        if (!string.IsNullOrEmpty(selectedPath) && Directory.Exists(selectedPath)) {
+            dialog.SelectedPath = selectedPath;
+        }
+        System.Windows.Forms.DialogResult result = dialog.ShowDialog();
+        if (result == System.Windows.Forms.DialogResult.OK && !string.IsNullOrEmpty(dialog.SelectedPath)) {
+            return dialog.SelectedPath;
+        }
+        return "";
+    }
+    public static object QueueExit() {
+        _exitPosted = true;
+        if (_main != null) {
+            _main.Dispatcher.BeginInvoke(new Action(delegate() { }));
+        }
+        return Ok();
+    }
+    public static object TakeExitRequest() {
+        if (!_exitPosted) return false;
+        _exitPosted = false;
+        return true;
+    }
+    public static object QueueWatchRefresh() {
+        _watchPosted = true;
+        if (_main != null) {
+            _main.Dispatcher.BeginInvoke(new Action(delegate() { }));
+        }
+        return Ok();
+    }
+    public static object TakeWatchRefresh() {
+        if (!_watchPosted) return false;
+        _watchPosted = false;
+        return true;
+    }
+    public static object StartPathWatch(string root) {
+        StopPathWatch();
+        if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) return Ok();
+        FileSystemWatcher watcher = new FileSystemWatcher(root, "*.bat");
+        watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite;
+        watcher.IncludeSubdirectories = false;
+        FileSystemEventHandler onChange = delegate(object s, FileSystemEventArgs e) {
+            QueueWatchRefresh();
+        };
+        watcher.Created += onChange;
+        watcher.Deleted += onChange;
+        watcher.Changed += onChange;
+        watcher.Renamed += delegate(object s, RenamedEventArgs e) {
+            QueueWatchRefresh();
+        };
+        watcher.EnableRaisingEvents = true;
+        _pathWatch = watcher;
+        return Ok();
+    }
+    public static object StopPathWatch() {
+        if (_pathWatch != null) {
+            try { _pathWatch.EnableRaisingEvents = false; } catch { }
+            try { _pathWatch.Dispose(); } catch { }
+            _pathWatch = null;
+        }
+        return Ok();
+    }
     public static object StartMainLoop() {
         if (_main == null) throw new InvalidOperationException("Main window is not loaded.");
         DispatcherFrame frame = new DispatcherFrame();
@@ -572,7 +649,11 @@ public static class ZapretUiHost {
 
 public static class ZapretSingleInstance {
     const string MutexName = @"Local\ZapretGUI.SingleInstance";
+    const string ShowEventName = @"Local\ZapretGUI.ShowMain";
     static Mutex _mutex;
+    static EventWaitHandle _showEvent;
+    static Thread _showThread;
+    static volatile bool _watch;
 
     public static object TryAcquire() {
         bool createdNew;
@@ -585,7 +666,41 @@ public static class ZapretSingleInstance {
         return true;
     }
 
+    public static object SignalShowMain() {
+        try {
+            EventWaitHandle ev = EventWaitHandle.OpenExisting(ShowEventName);
+            ev.Set();
+            ev.Dispose();
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    public static object StartShowWatcher() {
+        if (_showThread != null) return true;
+        bool created;
+        _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName, out created);
+        _watch = true;
+        _showThread = new Thread(ShowWatchLoop);
+        _showThread.IsBackground = true;
+        _showThread.Start();
+        return true;
+    }
+
+    static void ShowWatchLoop() {
+        while (_watch && _showEvent != null) {
+            if (!_showEvent.WaitOne(500)) continue;
+            if (!_watch) break;
+            ZapretUiHost.QueueShowMain();
+        }
+    }
+
     public static object Release() {
+        _watch = false;
+        try { if (_showEvent != null) _showEvent.Set(); } catch { }
+        try { if (_showEvent != null) _showEvent.Dispose(); } catch { }
+        _showEvent = null;
         if (_mutex == null) return true;
         try { _mutex.ReleaseMutex(); } catch { }
         try { _mutex.Dispose(); } catch { }
@@ -596,13 +711,33 @@ public static class ZapretSingleInstance {
 '@
 }
 
-$singleInstanceOk = [ZapretSingleInstance]::TryAcquire()
-if (-not $singleInstanceOk) {
-    if (-not $script:StartInTray) {
-        $dupMsg = [ZapretUiHost]::Ask('ZAPRET GUI', "ZAPRET GUI уже запущена.`nВторая копия не будет открыта.", 'OK')
+if (-not $script:UiProbe) {
+    $singleInstanceOk = [ZapretSingleInstance]::TryAcquire()
+    if (-not $singleInstanceOk) {
+        if (-not $script:StartInTray) {
+            $shown = [ZapretSingleInstance]::SignalShowMain()
+            if (-not $shown) {
+                $dupMsg = [ZapretUiHost]::Ask('ZAPRET GUI', "ZAPRET GUI уже запущена и свёрнута в трей.`nОткройте иконку ZAPRET рядом с часами или пункт «Открыть».", 'OK')
+            }
+        }
+        exit
     }
-    exit
 }
+
+# <gui-logic-inline>
+$script:GuiLogicFile = $null
+if ($PSScriptRoot) { $script:GuiLogicFile = Join-Path $PSScriptRoot 'zapret-gui-logic.ps1' }
+if (-not $script:GuiLogicFile -or -not (Test-Path -LiteralPath $script:GuiLogicFile)) {
+    $cmdPath = $MyInvocation.MyCommand.Path
+    if ($cmdPath) {
+        $altLogic = Join-Path (Split-Path -Parent $cmdPath) 'zapret-gui-logic.ps1'
+        if (Test-Path -LiteralPath $altLogic) { $script:GuiLogicFile = $altLogic }
+    }
+}
+if ($script:GuiLogicFile -and (Test-Path -LiteralPath $script:GuiLogicFile)) {
+    . $script:GuiLogicFile
+}
+# </gui-logic-inline>
 
 $script:GithubApiUrl = 'https://api.github.com/repos/Flowseal/zapret-discord-youtube/releases/latest'
 $script:GuiGithubApiUrl = 'https://api.github.com/repos/surensuccessful-ui/zapret-gui/releases/latest'
@@ -629,6 +764,14 @@ $script:Restarting = $false
 $script:TestBusy = $false
 $script:TestCancel = $false
 $script:SiteTestBusy = $false
+$script:GuiOperationLock = $false
+$script:OverlayCoversWindows = $false
+$script:RestoreSettingsAfterOverlay = $false
+$script:RestoreSiteTestAfterOverlay = $false
+$script:NextStatusRefreshAt = [datetime]::MinValue
+$script:StrategyRefreshSilent = $false
+$script:InstallSnapshot = $null
+$script:TestSnapshot = $null
 $script:AllowSiteTestClose = $false
 $script:SiteTestLogQueue = [System.Collections.Concurrent.ConcurrentQueue[object]]::new()
 $script:Watcher = $null
@@ -1369,13 +1512,6 @@ function Find-ZapretNear {
     )
 }
 
-function Compare-ZapretVersion {
-    param([string]$A, [string]$B)
-    $na = ($A -replace '[^0-9.].*$', '')
-    $nb = ($B -replace '[^0-9.].*$', '')
-    try { return ([version]$na).CompareTo([version]$nb) } catch { return [string]::CompareOrdinal($A, $B) }
-}
-
 function Start-GithubCheck {
     if ($script:GithubSync -and -not $script:GithubSync.Done) { return }
     $sync = [hashtable]::Synchronized(@{ Done = $false; Version = ''; Error = '' })
@@ -1427,13 +1563,13 @@ function Initialize-TrayIcon {
     if (-not $ni.Icon) { $ni.Icon = [System.Drawing.SystemIcons]::Application }
     $menu = [System.Windows.Forms.ContextMenuStrip]::new()
     $openItem = [System.Windows.Forms.ToolStripMenuItem]::new('Открыть')
-    $openItem.Add_Click({ $shown = [ZapretUiHost]::ShowMain() })
+    $openItem.Add_Click({ $shown = [ZapretUiHost]::QueueShowMain() })
     $exitItem = [System.Windows.Forms.ToolStripMenuItem]::new('Выход')
-    $exitItem.Add_Click({ Exit-ZapretGui })
+    $exitItem.Add_Click({ $queued = [ZapretUiHost]::QueueExit() })
     $addedOpen = $menu.Items.Add($openItem)
     $addedExit = $menu.Items.Add($exitItem)
     $ni.ContextMenuStrip = $menu
-    $ni.Add_DoubleClick({ $shown = [ZapretUiHost]::ShowMain() })
+    $ni.Add_DoubleClick({ $shown = [ZapretUiHost]::QueueShowMain() })
     $script:TrayIcon = $ni
 }
 
@@ -1495,13 +1631,12 @@ function Copy-ZapretUserLists {
 
 function Test-BypassLooksWorking {
     if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) { return $true }
-    $urls = @('https://discord.com', 'https://www.youtube.com')
-    $ok = 0
-    foreach ($url in $urls) {
-        $tok = Test-OneUrl -Url $url -TimeoutSec 3
-        if ($tok -notmatch 'ERROR') { $ok++ }
+    foreach ($url in @('https://discord.com', 'https://www.youtube.com')) {
+        $raw = & curl.exe @('-s', '-o', 'NUL', '-w', '%{http_code}', '-m', '6', '--connect-timeout', '3', '--tlsv1.2', $url)
+        $code = ([string]$raw).Trim()
+        if ($code -match '^\d{3}$' -and $code -ne '000') { return $true }
     }
-    return ($ok -gt 0)
+    return $false
 }
 
 function Offer-FullStrategyTest {
@@ -1537,19 +1672,14 @@ function Complete-ZapretUpdate {
         Offer-FullStrategyTest "Стратегия $StrategyName отсутствует в новой сборке zapret."
         return
     }
-    $script:CmbStrategy.SelectedItem = $StrategyName
+    $script:StrategyRefreshSilent = $true
+    try { $script:CmbStrategy.SelectedItem = $StrategyName } finally { $script:StrategyRefreshSilent = $false }
     try {
-        Show-BusyOverlay 'Перезапуск службы' $StrategyName -1
-        Install-ZapretService -StrategyName $StrategyName
-        Hide-BusyOverlay
-        Start-Sleep -Milliseconds 800
-        if (Test-BypassLooksWorking) {
-            Add-Log "Служба перезапущена со стратегией $StrategyName" '#23A559'
-            Start-LiveHealthCheck -Force
-        } else {
-            Offer-FullStrategyTest "Стратегия $StrategyName не проходит проверку Discord/YouTube на новой сборке."
-        }
+        $script:InstallVerifyBypass = $true
+        Start-ZapretServiceInstall -StrategyName $StrategyName -Nested
+        $script:SetupHandoff = $true
     } catch {
+        $script:InstallVerifyBypass = $false
         Hide-BusyOverlay
         Offer-FullStrategyTest "Не удалось запустить $StrategyName на новой сборке: $($_.Exception.Message)"
     }
@@ -1642,16 +1772,11 @@ function Start-GuiUpdateCheck {
             $rel = $json | ConvertFrom-Json
             $Sync.Version = [string]$rel.tag_name
             $Sync.Published = [string]$rel.published_at
-            $exe = $null
-            $sums = $null
+            $assetLines = [System.Collections.Generic.List[string]]::new()
             foreach ($asset in @($rel.assets)) {
-                $name = [string]$asset.name
-                if ($name -eq 'ZapretGUI.exe') { $exe = $asset }
-                elseif (-not $exe -and $name -match '^ZapretGUI-.*\.exe$') { $exe = $asset }
-                if ($name -eq 'SHA256SUMS.txt') { $sums = $asset }
+                $assetLines.Add(([string]$asset.name) + "`t" + ([string]$asset.browser_download_url))
             }
-            if ($exe) { $Sync.DownloadUrl = [string]$exe.browser_download_url }
-            if ($sums) { $Sync.SumsUrl = [string]$sums.browser_download_url }
+            $Sync.AssetTable = [string]::Join("`n", $assetLines.ToArray())
         } catch {
             $Sync.Error = $_.Exception.Message
         }
@@ -1675,10 +1800,11 @@ function Complete-GuiUpdateCheck {
     Save-SettingsSafe
     $local = ConvertTo-GuiVersionText ([string]$script:GuiVersion)
     $remote = ConvertTo-GuiVersionText ([string]$sync.Version)
-    $url = [string]$sync.DownloadUrl
+    $picked = Resolve-GuiReleaseAssets $sync
+    $url = [string]$picked.DownloadUrl
     $script:GuiPendingRemote = $remote
     $script:GuiPendingDownloadUrl = $url
-    $script:GuiPendingSumsUrl = [string]$sync.SumsUrl
+    $script:GuiPendingSumsUrl = [string]$picked.SumsUrl
     if ($script:GuiUpdateCheckFromAbout) {
         $script:GuiUpdateCheckFromAbout = $false
         if ($sync.Error) {
@@ -1724,7 +1850,7 @@ function Complete-GuiUpdateCheck {
         Add-Log "Обновление GUI $remote пропущено пользователем, жду версию новее $($script:DeclinedGuiVersion)" '#8B9BB4'
         return
     }
-    if ($script:TestBusy -or $script:SiteTestBusy -or ($script:SetupSync -and -not $script:SetupSync.Done) -or ($script:GuiUpdateSync -and -not $script:GuiUpdateSync.Done)) {
+    if ($script:GuiOperationLock -or $script:TestBusy -or $script:SiteTestBusy -or ($script:SetupSync -and -not $script:SetupSync.Done) -or ($script:GuiUpdateSync -and -not $script:GuiUpdateSync.Done)) {
         $script:NextGuiUpdateCheckAt = (Get-Date).AddMinutes(15)
         return
     }
@@ -1738,7 +1864,32 @@ function Complete-GuiUpdateCheck {
         Save-SkippedGuiUpdate $remote
         return
     }
-    Start-GuiSelfUpdate -Version $remote -Url $url -SumsUrl ([string]$sync.SumsUrl)
+    Start-GuiSelfUpdate -Version $remote -Url $url -SumsUrl ([string]$script:GuiPendingSumsUrl)
+}
+
+function Resolve-GuiReleaseAssets {
+    param($Sync)
+    $names = [System.Collections.Generic.List[string]]::new()
+    $urls = @{}
+    $table = ''
+    if ($Sync -and $Sync.AssetTable) { $table = [string]$Sync.AssetTable }
+    foreach ($line in ($table -split "`n")) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $splitAt = $line.IndexOf("`t")
+        if ($splitAt -le 0) { continue }
+        $name = $line.Substring(0, $splitAt)
+        $assetUrl = $line.Substring($splitAt + 1)
+        $names.Add($name)
+        $urls[$name] = $assetUrl
+    }
+    $nameArray = [string[]]::new($names.Count)
+    if ($names.Count -gt 0) { $names.CopyTo($nameArray, 0) }
+    $chosen = Select-GuiUpdateAsset $nameArray
+    $download = ''
+    if ($chosen -and $urls.ContainsKey($chosen)) { $download = [string]$urls[$chosen] }
+    $sums = ''
+    if ($urls.ContainsKey('SHA256SUMS.txt')) { $sums = [string]$urls['SHA256SUMS.txt'] }
+    return @{ DownloadUrl = $download; SumsUrl = $sums }
 }
 
 function Start-GuiSelfUpdate {
@@ -1748,6 +1899,8 @@ function Start-GuiSelfUpdate {
         [string]$SumsUrl
     )
     if ($script:GuiUpdateSync -and -not $script:GuiUpdateSync.Done) { return }
+    if ($script:GuiOperationLock) { return }
+    $script:GuiOperationLock = $true
     Show-BusyOverlay 'Обновление ZAPRET GUI' "Скачиваю $Version..." 0
     Add-Log "Скачиваю ZAPRET GUI $Version" '#5865F2'
     $sync = [hashtable]::Synchronized(@{
@@ -1770,17 +1923,13 @@ function Start-GuiSelfUpdate {
                 return ($h -eq 'github.com' -or $h.EndsWith('.github.com') -or $h -eq 'objects.githubusercontent.com' -or $h.EndsWith('.githubusercontent.com'))
             }
             if (-not (TestHost $DownloadUrl)) { throw "Недопустимый адрес загрузки: $DownloadUrl" }
-            $expectedHash = ''
+            $Sync.SumsText = ''
             if ($SumsUrl -and (TestHost $SumsUrl)) {
                 try {
                     $wc = New-Object Net.WebClient
                     $wc.Headers['User-Agent'] = 'ZapretGUI'
-                    $sumsText = [string]$wc.DownloadString($SumsUrl)
+                    $Sync.SumsText = [string]$wc.DownloadString($SumsUrl)
                     $wc.Dispose()
-                    foreach ($line in ($sumsText -split "`n")) {
-                        if ($line -match '^([0-9a-fA-F]{64})\s+ZapretGUI\.exe\s*$') { $expectedHash = $Matches[1].ToLowerInvariant(); break }
-                        if (-not $expectedHash -and $line -match '^([0-9a-fA-F]{64})\s+ZapretGUI-.*\.exe\s*$') { $expectedHash = $Matches[1].ToLowerInvariant() }
-                    }
                 } catch { }
             }
             $Sync.Status = "Скачиваю ZAPRET GUI $Version"
@@ -1817,6 +1966,7 @@ function Start-GuiSelfUpdate {
                         }
                         $output.Write($buf, 0, $n)
                         $readTotal += $n
+                        if ($readTotal -gt 30MB) { throw 'Файл обновления слишком большой.' }
                         if ($total -gt 0) { $Sync.Percent = [int][Math]::Min(100, (100.0 * $readTotal / $total)) }
                         $Sync.Status = ('Скачиваю {0}  ({1:N1} МБ)' -f $Version, ($readTotal / 1MB))
                     }
@@ -1827,10 +1977,6 @@ function Start-GuiSelfUpdate {
                 }
             } finally {
                 $resp.Close()
-            }
-            if ($expectedHash) {
-                $actual = (Get-FileHash -LiteralPath $tmpPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                if ($actual -ne $expectedHash) { throw 'SHA-256 скачанного файла не совпал с SHA256SUMS.txt.' }
             }
             $Sync.Percent = 100
             $Sync.Status = 'Файл скачан'
@@ -1854,6 +2000,7 @@ function Complete-GuiSelfUpdate {
     try { $script:GuiUpdateRs.Close(); $script:GuiUpdateRs.Dispose() } catch { }
     if ($sync.Error) {
         Hide-BusyOverlay
+        Exit-GuiOperation
         Add-Log "Обновление GUI не удалось: $($sync.Error)" '#F23F42'
         $failDlg = Show-ZapretDialog -Title 'Обновление ZAPRET GUI' -Buttons 'OK' -Message "Не удалось скачать обновление:`n$($sync.Error)"
         return
@@ -1862,12 +2009,30 @@ function Complete-GuiSelfUpdate {
     $ver = [string]$sync.Version
     if (-not $src -or -not (Test-Path -LiteralPath $src)) {
         Hide-BusyOverlay
+        Exit-GuiOperation
+        return
+    }
+    $expectedHash = Get-GuiUpdateHashFromSums ([string]$sync.SumsText)
+    if (-not $expectedHash) {
+        Hide-BusyOverlay
+        Exit-GuiOperation
+        Add-Log 'В релизе нет проверенной строки SHA-256 для ZapretGUI.exe.' '#F23F42'
+        $hashDlg = Show-ZapretDialog -Title 'Обновление ZAPRET GUI' -Buttons 'OK' -Message 'В релизе нет проверенной строки SHA-256 для ZapretGUI.exe. Обновление остановлено.'
+        return
+    }
+    $actualHash = (Get-FileHash -LiteralPath $src -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $expectedHash) {
+        Hide-BusyOverlay
+        Exit-GuiOperation
+        Add-Log 'SHA-256 скачанного файла не совпал с SHA256SUMS.txt.' '#F23F42'
+        $hashDlg = Show-ZapretDialog -Title 'Обновление ZAPRET GUI' -Buttons 'OK' -Message 'SHA-256 скачанного файла не совпал с SHA256SUMS.txt.'
         return
     }
     try {
         Apply-GuiUpdate -SourcePath $src -Version $ver
     } catch {
         Hide-BusyOverlay
+        Exit-GuiOperation
         Add-Log "Не удалось установить обновление: $($_.Exception.Message)" '#F23F42'
         $failDlg = Show-ZapretDialog -Title 'Обновление ZAPRET GUI' -Buttons 'OK' -Message $_.Exception.Message
     }
@@ -2044,10 +2209,32 @@ function Resolve-ZapretPath {
 }
 
 function Show-BusyOverlay {
-    param([string]$Title, [string]$Sub = '', [int]$Percent = -1)
+    param([string]$Title, [string]$Sub = '', [int]$Percent = -1, [switch]$AllowCancel)
     if (-not $script:PnlOverlay) { return }
+    if (-not $script:OverlayCoversWindows) {
+        $script:RestoreSettingsAfterOverlay = $false
+        $script:RestoreSiteTestAfterOverlay = $false
+        try {
+            if ([ZapretUiHost]::SettingsIsVisible()) {
+                $script:RestoreSettingsAfterOverlay = $true
+                $hiddenSettings = [ZapretUiHost]::HideSettings()
+            }
+        } catch { }
+        try {
+            if ([ZapretUiHost]::SiteTestIsVisible()) {
+                $script:RestoreSiteTestAfterOverlay = $true
+                $hiddenSite = [ZapretUiHost]::HideSiteTest()
+            }
+        } catch { }
+        try { $shownMain = [ZapretUiHost]::ShowMain() } catch { }
+        $script:OverlayCoversWindows = $true
+    }
     $script:PnlOverlay.Visibility = 'Visible'
     if ($script:BtnOverlayRetry) { $script:BtnOverlayRetry.Visibility = 'Collapsed' }
+    if ($script:BtnOverlayCancel) {
+        $showCancel = $AllowCancel -or $script:TestBusy -or $script:SiteTestBusy
+        $script:BtnOverlayCancel.Visibility = $(if ($showCancel) { 'Visible' } else { 'Collapsed' })
+    }
     if ($script:LblOverlayTitle) { $script:LblOverlayTitle.Text = $Title }
     if ($script:LblOverlaySub) { $script:LblOverlaySub.Text = $Sub }
     if ($script:PrgOverlay) {
@@ -2066,6 +2253,23 @@ function Show-BusyOverlay {
 function Hide-BusyOverlay {
     if ($script:PnlOverlay) { $script:PnlOverlay.Visibility = 'Collapsed' }
     if ($script:PrgOverlay) { $script:PrgOverlay.IsIndeterminate = $false }
+    if ($script:BtnOverlayCancel) { $script:BtnOverlayCancel.Visibility = 'Collapsed' }
+    if (-not $script:OverlayCoversWindows) { return }
+    $script:OverlayCoversWindows = $false
+    $restoreSite = [bool]$script:RestoreSiteTestAfterOverlay
+    $restoreSettings = [bool]$script:RestoreSettingsAfterOverlay
+    $script:RestoreSiteTestAfterOverlay = $false
+    $script:RestoreSettingsAfterOverlay = $false
+    if ($restoreSite) {
+        try { $shownSite = [ZapretUiHost]::ShowSiteTest() } catch { }
+    }
+    if ($restoreSettings) {
+        try { $shownSettings = [ZapretUiHost]::ShowSettings() } catch { }
+    }
+}
+
+function Exit-GuiOperation {
+    $script:GuiOperationLock = $false
 }
 
 function Find-ZapretInTree {
@@ -2082,6 +2286,8 @@ function Find-ZapretInTree {
 function Start-ZapretAutoSetup {
     param([switch]$Update)
     if ($script:SetupSync -and -not $script:SetupSync.Done) { return }
+    if ($script:GuiOperationLock) { return }
+    $script:GuiOperationLock = $true
     if ($Update) {
         $script:SetupIsUpdate = $true
         $script:PendingUpdateStrategy = Get-PreferredStrategyName
@@ -2140,19 +2346,32 @@ function Start-ZapretAutoSetup {
             $req.AllowAutoRedirect = $true
             $req.Timeout = 60000
             $resp = $req.GetResponse()
-            $total = $resp.ContentLength
-            if ($total -gt 500MB) { throw 'Архив zapret имеет недопустимо большой размер.' }
-            $input = $resp.GetResponseStream()
-            $output = [IO.File]::Create($zipPath)
-            $buf = New-Object byte[] 65536
-            $readTotal = [int64]0
-            while (($n = $input.Read($buf, 0, $buf.Length)) -gt 0) {
-                $output.Write($buf, 0, $n)
-                $readTotal += $n
-                if ($total -gt 0) { $Sync.Percent = [int][Math]::Min(100, (100.0 * $readTotal / $total)) }
-                $Sync.Status = ('Скачиваю zapret {0}  ({1:N1} МБ)' -f $version, ($readTotal / 1MB))
+            try {
+                $finalHost = ([Uri]$resp.ResponseUri).Host.ToLowerInvariant()
+                if (-not ($finalHost -eq 'github.com' -or $finalHost.EndsWith('.github.com') -or $finalHost -eq 'objects.githubusercontent.com' -or $finalHost.EndsWith('.githubusercontent.com'))) {
+                    throw "GitHub перенаправил загрузку на недопустимый хост: $finalHost"
+                }
+                $total = $resp.ContentLength
+                if ($total -gt 500MB) { throw 'Архив zapret имеет недопустимо большой размер.' }
+                $input = $resp.GetResponseStream()
+                $output = [IO.File]::Create($zipPath)
+                try {
+                    $buf = New-Object byte[] 65536
+                    $readTotal = [int64]0
+                    while (($n = $input.Read($buf, 0, $buf.Length)) -gt 0) {
+                        $output.Write($buf, 0, $n)
+                        $readTotal += $n
+                        if ($readTotal -gt 500MB) { throw 'Архив zapret имеет недопустимо большой размер.' }
+                        if ($total -gt 0) { $Sync.Percent = [int][Math]::Min(100, (100.0 * $readTotal / $total)) }
+                        $Sync.Status = ('Скачиваю zapret {0}  ({1:N1} МБ)' -f $version, ($readTotal / 1MB))
+                    }
+                } finally {
+                    $output.Close()
+                    $input.Close()
+                }
+            } finally {
+                $resp.Close()
             }
-            $output.Close(); $input.Close(); $resp.Close()
             $zipStream = [IO.File]::OpenRead($zipPath)
             try {
                 $firstByte = $zipStream.ReadByte()
@@ -2216,6 +2435,7 @@ function Complete-ZapretAutoSetup {
         Show-BusyOverlay 'Не удалось скачать zapret' $sync.Error -1
         if ($script:BtnOverlayRetry) { $script:BtnOverlayRetry.Visibility = 'Visible' }
         $script:OverlayRetryUpdate = [bool]$script:SetupIsUpdate
+        Exit-GuiOperation
         return
     }
     $isUpdate = [bool]$script:SetupIsUpdate
@@ -2230,14 +2450,17 @@ function Complete-ZapretAutoSetup {
         Add-Log "Скачано и подключено: $($sync.Path)" '#23A559'
         Hide-BusyOverlay
         Start-GithubCheck
-        if (-not $script:FirstRunCompleted) {
-            Show-FirstRunStrategyOffer
-        }
     } catch {
         Add-Log $_.Exception.Message '#F23F42'
         Show-BusyOverlay 'Ошибка подключения' $_.Exception.Message -1
         if ($script:BtnOverlayRetry) { $script:BtnOverlayRetry.Visibility = 'Visible' }
         $script:OverlayRetryUpdate = $isUpdate
+    } finally {
+        if (-not $script:SetupHandoff) { Exit-GuiOperation }
+        $script:SetupHandoff = $false
+    }
+    if (-not $isUpdate -and $script:Root -and -not $script:FirstRunCompleted -and -not $script:GuiOperationLock) {
+        Show-FirstRunStrategyOffer
     }
 }
 
@@ -2469,30 +2692,6 @@ function Save-ListEntries {
     Write-Utf8Lines $Path $lines.ToArray()
 }
 
-function ConvertTo-HostName {
-    param([string]$Raw)
-    if ([string]::IsNullOrWhiteSpace($Raw)) { return $null }
-    $value = $Raw.Trim()
-    $value = $value -replace '^\^', ''
-    $value = $value -replace '^[a-zA-Z][a-zA-Z0-9+.-]*://', ''
-    $value = $value -replace '^[^@/]+@', ''
-    $value = ($value -split '[/?#]', 2)[0]
-    $value = $value.Trim().TrimEnd('.')
-    if ($value -match '^\[.+' ) { return $null }
-    if ($value -match '^([^:]+):\d+$') { $value = $Matches[1] }
-    $value = $value.Trim().ToLowerInvariant()
-    if ($value.StartsWith('www.')) { $value = $value.Substring(4) }
-    if ($value -match '^\d{1,3}(\.\d{1,3}){3}$') { return $null }
-    try {
-        $idn = New-Object System.Globalization.IdnMapping
-        $value = $idn.GetAscii($value)
-    } catch { return $null }
-    if ($value -notmatch '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$') {
-        return $null
-    }
-    return $value
-}
-
 function Test-HostInFiles {
     param([string]$HostName, [string[]]$Files)
     $needle = $HostName.ToLowerInvariant()
@@ -2539,7 +2738,7 @@ function Get-ZapretState {
             $other = $true
         }
     }
-    $running = $svcRunning -or ($winws.Count -gt 0)
+    $running = $svcRunning -or $ours
     $mode = 'нет'
     if ($svcRunning) { $mode = 'служба' }
     elseif ($ours) { $mode = 'winws' }
@@ -2573,10 +2772,7 @@ function Stop-Zapret {
         Stop-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
         if (-not $Quiet) { Add-Log 'Служба zapret остановлена' '#E8C36A' }
     }
-    Get-Process -Name 'winws' -ErrorAction SilentlyContinue | ForEach-Object {
-        try { $_.Kill() } catch { }
-    }
-    Start-Sleep -Milliseconds 350
+    Stop-OwnedWinws
 }
 
 function Get-OwnedWinwsPrefix {
@@ -2595,7 +2791,6 @@ function Stop-OwnedWinws {
             Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
         }
     }
-    Start-Sleep -Milliseconds 250
 }
 
 function Wait-OwnedWinws {
@@ -2616,6 +2811,47 @@ function Wait-OwnedWinws {
     return $false
 }
 
+function Get-ZapretServiceImagePath {
+    try {
+        $item = Get-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Services\zapret' -Name 'ImagePath' -ErrorAction Stop
+        return [string]$item.ImagePath
+    } catch {
+        return ''
+    }
+}
+
+function Invoke-ScExe {
+    param([string[]]$ArgumentList)
+    $exe = Join-Path $env:SystemRoot 'System32\sc.exe'
+    $output = & $exe @ArgumentList 2>&1 | Out-String
+    return $output.Trim()
+}
+
+function Restore-ZapretServiceImage {
+    param([string]$ImagePath, [string]$StrategyValue)
+    if ([string]::IsNullOrWhiteSpace($ImagePath)) { return $false }
+    $current = [string](Get-ZapretServiceImagePath)
+    if ($current -and [string]::Equals($current.Trim(), $ImagePath.Trim(), [StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+    $existing = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+    if ($existing) {
+        try { Stop-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue } catch { }
+        $deleted = Invoke-ScExe @('delete', 'zapret')
+    }
+    $created = Invoke-ScExe @('create', 'zapret', 'binPath=', $ImagePath, 'DisplayName=', 'zapret', 'start=', 'auto')
+    Add-Log $created '#8B9BB4'
+    $described = Invoke-ScExe @('description', 'zapret', 'Zapret DPI bypass software')
+    if ($StrategyValue) {
+        $regPath = 'HKLM:\System\CurrentControlSet\Services\zapret'
+        if (Test-Path -LiteralPath $regPath) {
+            New-ItemProperty -Path $regPath -Name 'zapret-discord-youtube' -Value $StrategyValue -PropertyType String -Force | Out-Null
+        }
+    }
+    $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+    return [bool]$svc
+}
+
 function Get-ZapretRuntimeSnapshot {
     $state = Get-ZapretState
     return @{
@@ -2623,6 +2859,8 @@ function Get-ZapretRuntimeSnapshot {
         ServiceRunning   = [bool]$state.ServiceRunning
         ManualRunning    = [bool]($state.ThisBuildRunning -and -not $state.ServiceInstalled)
         Strategy         = [string](Get-PreferredStrategyName)
+        StrategyValue    = [string](Get-InstalledStrategy)
+        ImagePath        = [string](Get-ZapretServiceImagePath)
     }
 }
 
@@ -2631,16 +2869,21 @@ function Restore-ZapretRuntimeSnapshot {
     if (-not $Snap) { return }
     Stop-OwnedWinws
     if ($Snap.ServiceInstalled) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$Snap.ImagePath)) {
+            $imageBefore = [string](Get-ZapretServiceImagePath)
+            $restored = Restore-ZapretServiceImage -ImagePath ([string]$Snap.ImagePath) -StrategyValue ([string]$Snap.StrategyValue)
+            $imageAfter = [string](Get-ZapretServiceImagePath)
+            if ($restored -and -not [string]::Equals($imageBefore.Trim(), $imageAfter.Trim(), [StringComparison]::OrdinalIgnoreCase)) {
+                Add-Log 'Служба zapret восстановлена из снимка' '#6EC6FF'
+            }
+        }
         $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
         if ($svc -and $Snap.ServiceRunning) {
-            Start-Service -Name 'zapret' -ErrorAction SilentlyContinue
-            $deadline = (Get-Date).AddSeconds(10)
-            while ((Get-Date) -lt $deadline) {
-                try { $svc.Refresh() } catch { }
-                if ($svc.Status -eq 'Running') { break }
-                Start-Sleep -Milliseconds 300
+            try { Start-Service -Name 'zapret' -ErrorAction Stop } catch {
+                Add-Log "Не удалось запустить прежнюю службу: $($_.Exception.Message)" '#FF8A8A'
+                return
             }
-            Add-Log 'Служба zapret возвращена после теста сайтов' '#6EC6FF'
+            Add-Log 'Прежняя служба zapret снова запущена' '#6EC6FF'
         }
         return
     }
@@ -2703,7 +2946,7 @@ function Start-ZapretFromMain {
         throw 'Выберите стратегию в настройках.'
     }
     Add-Log "Служба не установлена — устанавливаю выбранную стратегию: $name" '#6EC6FF'
-    Install-ZapretService -StrategyName $name
+    Start-ZapretServiceInstall -StrategyName $name
 }
 
 function Start-InstalledZapretService {
@@ -2719,11 +2962,15 @@ function Start-InstalledZapretService {
 
 function Wait-Winws {
     param([int]$TimeoutMs = 8000)
+    $prefix = Get-OwnedWinwsPrefix
     $sw = [Diagnostics.Stopwatch]::StartNew()
     while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
-        if (Get-Process -Name 'winws' -ErrorAction SilentlyContinue) {
-            Start-Sleep -Milliseconds 400
-            return $true
+        foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name = 'winws.exe'" -ErrorAction SilentlyContinue)) {
+            $path = [string]$proc.ExecutablePath
+            if ($prefix -and $path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                Start-Sleep -Milliseconds 400
+                return $true
+            }
         }
         Start-Sleep -Milliseconds 200
     }
@@ -2731,10 +2978,11 @@ function Wait-Winws {
 }
 
 function Invoke-LoadUserLists {
+    param([switch]$Wait)
     $service = Join-Path $script:Root 'service.bat'
-    if (Test-Path -LiteralPath $service) {
-        Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "`"$service`" load_user_lists" -WorkingDirectory $script:Root -WindowStyle Hidden -Wait | Out-Null
-    }
+    if (-not (Test-Path -LiteralPath $service)) { return }
+    $loader = Start-Process -FilePath $service -ArgumentList 'load_user_lists' -WorkingDirectory $script:Root -WindowStyle Hidden -PassThru
+    if ($Wait -and $loader) { $loader.WaitForExit() }
 }
 
 function Get-CurrentListInfo {
@@ -3217,95 +3465,254 @@ function Remove-ZapretService {
     param([switch]$Quiet)
     $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
     if ($svc) {
-        Stop-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
-        sc.exe delete zapret | Out-Null
+        try { Stop-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue } catch { }
+        $deleted = Invoke-ScExe @('delete', 'zapret')
+        if (-not $Quiet -and $deleted) { Add-Log $deleted '#8B9BB4' }
         if (-not $Quiet) { Add-Log 'Служба zapret снята' '#E8C36A' }
     }
     Stop-Zapret -Quiet
-    foreach ($name in @('WinDivert', 'WinDivert14')) {
-        sc.exe stop $name 2>$null | Out-Null
-        sc.exe delete $name 2>$null | Out-Null
-    }
 }
 
-function Get-WinwsCommandLine {
-    try {
-        $proc = Get-CimInstance Win32_Process -Filter "Name = 'winws.exe'" -ErrorAction Stop | Select-Object -First 1
-        if ($proc -and $proc.CommandLine) { return [string]$proc.CommandLine }
-    } catch { }
+function Get-OwnedWinwsCommandLine {
+    param([string]$Root = $script:Root)
+    $prefix = Get-OwnedWinwsPrefix $Root
+    if (-not $prefix) { return $null }
+    foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name = 'winws.exe'" -ErrorAction SilentlyContinue)) {
+        $path = [string]$proc.ExecutablePath
+        if ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and $proc.CommandLine) {
+            return [string]$proc.CommandLine
+        }
+    }
     return $null
 }
 
-function Install-ZapretService {
-    param([string]$StrategyName)
+function Get-WinwsCommandLine {
+    return (Get-OwnedWinwsCommandLine)
+}
+
+function Start-ZapretServiceInstall {
+    param([string]$StrategyName, [switch]$Nested)
     if ([string]::IsNullOrWhiteSpace($StrategyName)) { throw 'Нет стратегии для установки в службу.' }
+    if (-not $Nested) {
+        if ($script:GuiOperationLock) { return }
+        $script:GuiOperationLock = $true
+        $script:InstallSnapshot = Get-ZapretRuntimeSnapshot
+    } else {
+        $script:InstallSnapshot = $script:TestSnapshot
+    }
+    $installOwnsLock = -not $Nested
+    try {
     $bat = Join-Path $script:Root $StrategyName
     if (-not (Test-Path -LiteralPath $bat)) { throw "Стратегия не найдена: $StrategyName" }
-
     $winws = Join-Path $script:Root 'bin\winws.exe'
     if (-not (Test-Path -LiteralPath $winws)) { $winws = Join-Path $script:Root 'winws.exe' }
     if (-not (Test-Path -LiteralPath $winws)) { throw 'winws.exe не найден в этой сборке zapret.' }
 
+    $script:TestBusy = $true
+    Set-TestUi $true
+    Show-BusyOverlay 'Установка службы' $StrategyName -1 -AllowCancel
     Add-Log "Ставлю службу zapret для $StrategyName (автозапуск с Windows)..." '#6EC6FF'
-    Enable-TcpTimestamps
-    Invoke-LoadUserLists
-    Remove-ZapretService -Quiet
-    Start-Sleep -Milliseconds 400
-
-    $psi = New-Object Diagnostics.ProcessStartInfo
-    $psi.FileName = $bat
-    $psi.WorkingDirectory = $script:Root
-    $psi.UseShellExecute = $true
-    $psi.WindowStyle = 'Hidden'
-    $strategyProcess = [Diagnostics.Process]::Start($psi)
-    if (-not (Wait-Winws 12000)) { throw 'winws.exe не запустился — службу поставить нельзя.' }
-
-    $cmd = Get-WinwsCommandLine
-    if ([string]::IsNullOrWhiteSpace($cmd)) { throw 'Не удалось прочитать командную строку winws.exe.' }
-    Add-Log "Командная строка службы получена" '#8B9BB4'
-
-    if ($cmd.StartsWith('"')) {
-        $end = $cmd.IndexOf('"', 1)
-        $exe = $cmd.Substring(1, $end - 1)
-        $winArgs = $cmd.Substring($end + 1).Trim()
-    } else {
-        $sp = $cmd.IndexOf(' ')
-        if ($sp -lt 0) { $exe = $cmd; $winArgs = '' } else {
-            $exe = $cmd.Substring(0, $sp)
-            $winArgs = $cmd.Substring($sp + 1).Trim()
+    $sync = [hashtable]::Synchronized(@{ Done = $false; Error = ''; Strategy = $StrategyName; Cancel = $false })
+    $script:InstallSync = $sync
+    $root = [string]$script:Root
+    $queue = $script:LogQueue
+    $serviceBat = Join-Path $root 'service.bat'
+    $script:InstallRs = [runspacefactory]::CreateRunspace()
+    $script:InstallRs.ApartmentState = 'MTA'
+    $script:InstallRs.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $script:InstallRs
+    $installPipeline = $ps.AddScript({
+        param($Root, $StrategyName, $Bat, $ServiceBat, $Queue, $Sync)
+        function QLog($msg, $color) {
+            $Queue.Enqueue([pscustomobject]@{ Message = $msg; Color = $color; Time = Get-Date })
         }
+        function Prefix { return ($Root.TrimEnd('\') + '\') }
+        function StopOwned {
+            $prefix = Prefix
+            foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name = 'winws.exe'" -ErrorAction SilentlyContinue)) {
+                $path = [string]$p.ExecutablePath
+                if ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                    Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+        function WaitOwned([int]$TimeoutMs) {
+            $prefix = Prefix
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
+                if ($Sync.Cancel) { return $false }
+                foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name = 'winws.exe'" -ErrorAction SilentlyContinue)) {
+                    $path = [string]$p.ExecutablePath
+                    if ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                        Start-Sleep -Milliseconds 400
+                        return $true
+                    }
+                }
+                Start-Sleep -Milliseconds 200
+            }
+            return $false
+        }
+        function OwnedCommand {
+            $prefix = Prefix
+            foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name = 'winws.exe'" -ErrorAction SilentlyContinue)) {
+                $path = [string]$p.ExecutablePath
+                if ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and $p.CommandLine) {
+                    return [string]$p.CommandLine
+                }
+            }
+            return $null
+        }
+        try {
+            if ($Sync.Cancel) { throw 'Установка службы отменена.' }
+            try {
+                $show = netsh interface tcp show global
+                if ($show -notmatch 'timestamps\s+enabled') {
+                    netsh interface tcp set global timestamps=enabled | Out-Null
+                }
+            } catch { }
+            if ($ServiceBat -and (Test-Path -LiteralPath $ServiceBat)) {
+                $loader = Start-Process -FilePath $ServiceBat -ArgumentList 'load_user_lists' -WorkingDirectory $Root -WindowStyle Hidden -PassThru -Wait
+            }
+            if ($Sync.Cancel) { throw 'Установка службы отменена.' }
+            $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+            if ($svc) {
+                try { Stop-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue } catch { }
+                & "$env:SystemRoot\System32\sc.exe" delete zapret | Out-Null
+            }
+            StopOwned
+            $psi = New-Object Diagnostics.ProcessStartInfo
+            $psi.FileName = $Bat
+            $psi.WorkingDirectory = $Root
+            $psi.UseShellExecute = $true
+            $psi.WindowStyle = 'Hidden'
+            $started = [Diagnostics.Process]::Start($psi)
+            if (-not (WaitOwned 12000)) { throw 'winws.exe этой сборки не запустился — службу поставить нельзя.' }
+            $cmd = OwnedCommand
+            if ([string]::IsNullOrWhiteSpace($cmd)) { throw 'Не удалось прочитать командную строку winws.exe.' }
+            QLog 'Командная строка службы получена' '#8B9BB4'
+            if ($cmd.StartsWith('"')) {
+                $end = $cmd.IndexOf('"', 1)
+                $exePath = $cmd.Substring(1, $end - 1)
+                $winArgs = $cmd.Substring($end + 1).Trim()
+            } else {
+                $sp = $cmd.IndexOf(' ')
+                if ($sp -lt 0) { $exePath = $cmd; $winArgs = '' } else {
+                    $exePath = $cmd.Substring(0, $sp)
+                    $winArgs = $cmd.Substring($sp + 1).Trim()
+                }
+            }
+            $prefix = Prefix
+            if ($exePath -and -not $exePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Командная строка winws не принадлежит подключённой папке.'
+            }
+            StopOwned
+            if ($Sync.Cancel) { throw 'Установка службы отменена.' }
+            try { Stop-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue } catch { }
+            & "$env:SystemRoot\System32\sc.exe" delete zapret | Out-Null
+            $image = ('"{0}" {1}' -f $exePath, $winArgs).Trim()
+            $createOut = & "$env:SystemRoot\System32\sc.exe" create zapret binPath= $image DisplayName= zapret start= auto 2>&1 | Out-String
+            QLog $createOut.Trim() '#8B9BB4'
+            & "$env:SystemRoot\System32\sc.exe" description zapret "Zapret DPI bypass software" | Out-Null
+            $valueName = [IO.Path]::GetFileNameWithoutExtension($StrategyName)
+            $regPath = 'HKLM:\System\CurrentControlSet\Services\zapret'
+            if (Test-Path -LiteralPath $regPath) {
+                New-ItemProperty -Path $regPath -Name 'zapret-discord-youtube' -Value $valueName -PropertyType String -Force | Out-Null
+            }
+            $startOut = & "$env:SystemRoot\System32\sc.exe" start zapret 2>&1 | Out-String
+            QLog $startOut.Trim() '#8B9BB4'
+            $deadline = (Get-Date).AddSeconds(8)
+            $running = $false
+            while ((Get-Date) -lt $deadline) {
+                $svc2 = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+                if ($svc2 -and $svc2.Status -eq 'Running') { $running = $true; break }
+                Start-Sleep -Milliseconds 300
+            }
+            if (-not $running) { throw 'Служба создана, но не запустилась. Откройте service.bat → Check Status.' }
+            $Sync.Done = $true
+        } catch {
+            $Sync.Error = $_.Exception.Message
+            $Sync.Done = $true
+        }
+    }).AddArgument($root).AddArgument($StrategyName).AddArgument($bat).AddArgument($serviceBat).AddArgument($queue).AddArgument($sync)
+    $script:InstallPs = $ps
+    $script:InstallHandle = $ps.BeginInvoke()
+    } catch {
+        $script:TestBusy = $false
+        $script:InstallSync = $null
+        try { Set-TestUi $false } catch { }
+        try { Hide-BusyOverlay } catch { }
+        if ($installOwnsLock) { Exit-GuiOperation }
+        throw
     }
+}
 
-    Stop-Zapret -Quiet
-    Start-Sleep -Milliseconds 400
-    sc.exe stop zapret 2>$null | Out-Null
-    sc.exe delete zapret 2>$null | Out-Null
+function Finish-GuiOperation {
+    $script:TestBusy = $false
+    $script:SiteTestBusy = $false
+    $script:AutoInstallBest = $false
+    $script:TestSnapshot = $null
+    $script:InstallSnapshot = $null
+    $script:InstallSync = $null
+    $script:InstallVerifyBypass = $false
+    Set-TestUi $false
+    Hide-BusyOverlay
+    Exit-GuiOperation
+    Refresh-Status
+}
 
-    $scBin = '\"{0}\" {1}' -f $exe, $winArgs
-    $createOut = cmd.exe /c "sc create zapret binPath= `"$scBin`" DisplayName= `"zapret`" start= auto"
-    Add-Log (($createOut | Out-String).Trim()) '#8B9BB4'
-    cmd.exe /c 'sc description zapret "Zapret DPI bypass software"' | Out-Null
-
-    $valueName = [IO.Path]::GetFileNameWithoutExtension($StrategyName)
-    $regPath = 'HKLM:\System\CurrentControlSet\Services\zapret'
-    if (Test-Path -LiteralPath $regPath) {
-        New-ItemProperty -Path $regPath -Name 'zapret-discord-youtube' -Value $valueName -PropertyType String -Force | Out-Null
+function Complete-ZapretServiceInstall {
+    if (-not $script:InstallSync -or -not $script:InstallSync.Done) { return }
+    $sync = $script:InstallSync
+    $script:InstallSync = $null
+    $name = [string]$sync.Strategy
+    try { $ignored = $script:InstallPs.EndInvoke($script:InstallHandle) } catch { }
+    try { $script:InstallPs.Dispose() } catch { }
+    try { $script:InstallRs.Close(); $script:InstallRs.Dispose() } catch { }
+    if ($sync.Error) {
+        Add-Log "Установка службы не удалась: $($sync.Error)" '#FF8A8A'
+        try { Restore-ZapretRuntimeSnapshot $script:InstallSnapshot } catch {
+            Add-Log $_.Exception.Message '#FF8A8A'
+        }
+        $errDlg = Show-ZapretDialog -Title 'ZAPRET GUI' -Buttons 'OK' -Message ([string]$sync.Error)
+        Finish-GuiOperation
+        return
     }
-
-    $startOut = cmd.exe /c 'sc start zapret'
-    Add-Log (($startOut | Out-String).Trim()) '#8B9BB4'
-    Start-Sleep -Milliseconds 900
-    $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
-    if (-not $svc -or $svc.Status -ne 'Running') {
-        throw 'Служба создана, но не запустилась. Откройте service.bat → Check Status.'
-    }
-    if (Test-ComboHasItem $script:CmbStrategy $StrategyName) {
-        $script:CmbStrategy.SelectedItem = $StrategyName
+    if ($name -and (Test-ComboHasItem $script:CmbStrategy $name)) {
+        $script:StrategyRefreshSilent = $true
+        try { $script:CmbStrategy.SelectedItem = $name } finally { $script:StrategyRefreshSilent = $false }
     }
     Save-SettingsSafe
-    Refresh-Status
-    Add-Log "Готово: $StrategyName работает как служба и будет стартовать вместе с Windows." '#3DDC97'
+    Add-Log "Готово: $name работает как служба и будет стартовать вместе с Windows." '#3DDC97'
+    $verifyBypass = [bool]$script:InstallVerifyBypass
+    $script:InstallVerifyBypass = $false
+    Finish-GuiOperation
     Start-LiveHealthCheck -Force
+    if ($verifyBypass -and -not (Test-BypassLooksWorking)) {
+        Offer-FullStrategyTest "Стратегия $name не проходит проверку Discord/YouTube на новой сборке."
+    }
+}
+
+function Get-StrategyScoreTargets {
+    $live = Get-LiveCheckTargets
+    $list = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($group in @('Discord', 'Youtube')) {
+        $rows = $live[$group]
+        if (-not $rows) { continue }
+        foreach ($t in $rows) {
+            if ($t -and $t.Url) { $list.Add(@{ Name = [string]$t.Name; Url = [string]$t.Url }) }
+        }
+    }
+    return $list
+}
+
+function Suspend-ZapretForStrategyTest {
+    $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -ne 'Stopped') {
+        Stop-Service -Name 'zapret' -Force -ErrorAction Stop
+        Add-Log 'Служба zapret временно остановлена для автотеста' '#E8C36A'
+    }
+    Stop-OwnedWinws
 }
 
 function Start-StrategyTestsSafe {
@@ -3313,177 +3720,195 @@ function Start-StrategyTestsSafe {
         [string[]]$StrategyNames,
         [switch]$AutoInstallBest
     )
-    if ($script:TestBusy) { return }
+    if ($script:GuiOperationLock -or $script:TestBusy) { return }
     if (-not $StrategyNames -or $StrategyNames.Count -eq 0) { Add-Log 'Нет стратегий для теста' '#E8C36A'; return }
     if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) { Add-Log 'curl.exe не найден' '#FF8A8A'; return }
-    if ((Get-ZapretState).ServiceInstalled) {
+    $script:GuiOperationLock = $true
+    $script:TestSnapshot = Get-ZapretRuntimeSnapshot
+    try {
+        Suspend-ZapretForStrategyTest
+        $targets = Get-StrategyScoreTargets
+        if ($targets.Count -eq 0) { throw 'Нет целей Discord и YouTube для автотеста.' }
+        $script:TestBusy = $true
+        $script:TestCancel = $false
+        $script:AutoInstallBest = [bool]$AutoInstallBest
+        Set-TestUi $true
+        Show-BusyOverlay 'Проверка стратегий' 'Запуск тестов...' -1 -AllowCancel
+        $root = $script:Root
+        $queue = $script:LogQueue
+        $sync = [hashtable]::Synchronized(@{ Cancel = $false; Report = ''; Done = $false; Best = ''; Cancelled = $false; Index = 0; Total = $StrategyNames.Count; Name = ''; Stage = 'test' })
+        $script:TestSync = $sync
         if ($AutoInstallBest) {
-            Add-Log 'Снимаю текущую службу, чтобы прогнать автотест...' '#E8C36A'
-            Remove-ZapretService -Quiet
+            Add-Log ("Автотест лучшей стратегии: {0} шт., затем установка в службу" -f $StrategyNames.Count) '#6EC6FF'
         } else {
-            Add-Log 'Снимите службу zapret перед тестом стратегий' '#FF8A8A'
-            return
+            Add-Log ("Старт теста: {0} стратегий, {1} целей" -f $StrategyNames.Count, $targets.Count) '#6EC6FF'
         }
-    }
-
-    $script:TestBusy = $true
-    $script:TestCancel = $false
-    $script:AutoInstallBest = [bool]$AutoInstallBest
-    Set-TestUi $true
-    Show-BusyOverlay 'Проверка стратегий' 'Запуск тестов...' -1
-    $targets = @(Get-DefaultTargets)
-    $root = $script:Root
-    $queue = $script:LogQueue
-    $sync = [hashtable]::Synchronized(@{ Cancel = $false; Report = ''; Done = $false; Best = ''; Cancelled = $false; Index = 0; Total = $StrategyNames.Count; Name = ''; Stage = 'test' })
-    $script:TestSync = $sync
-    if ($AutoInstallBest) {
-        Add-Log ("Автотест лучшей стратегии: {0} шт., затем установка в службу" -f $StrategyNames.Count) '#6EC6FF'
-    } else {
-        Add-Log ("Старт теста: {0} стратегий, {1} целей" -f $StrategyNames.Count, $targets.Count) '#6EC6FF'
-    }
-
-    $script:TestRunspace = [runspacefactory]::CreateRunspace()
-    $script:TestRunspace.ApartmentState = 'MTA'
-    $script:TestRunspace.Open()
-    $ps = [powershell]::Create()
-    $ps.Runspace = $script:TestRunspace
-    $testPipeline = $ps.AddScript({
-        param($Root, $Names, $Targets, $Queue, $Sync)
-        function QLog($msg, $color) {
-            $Queue.Enqueue([pscustomobject]@{ Message = $msg; Color = $color; Time = Get-Date })
-        }
-        function Stop-Winws { Get-Process -Name 'winws' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
-        $report = [System.Collections.Generic.List[string]]::new()
-        $best = $null
-        $bestOk = -1
-        $i = 0
-        try {
-        foreach ($name in $Names) {
-            $i++
-            if ($Sync.Cancel) { QLog 'Тест прерван' '#E8C36A'; break }
-            $Sync.Index = $i
-            $Sync.Total = $Names.Count
-            $Sync.Name = $name
-            $bat = Join-Path $Root $name
-            QLog ("[{0}/{1}] {2}" -f $i, $Names.Count, $name) '#E8C36A'
-            $report.Add("Config: $name")
-            Stop-Winws
-            Start-Sleep -Milliseconds 300
-            try {
-                $p = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "`"$bat`"" -WorkingDirectory $Root -WindowStyle Hidden -PassThru
-            } catch {
-                QLog "  не удалось запустить: $($_.Exception.Message)" '#FF8A8A'
-                continue
+        $script:TestRunspace = [runspacefactory]::CreateRunspace()
+        $script:TestRunspace.ApartmentState = 'MTA'
+        $script:TestRunspace.Open()
+        $ps = [powershell]::Create()
+        $ps.Runspace = $script:TestRunspace
+        $testPipeline = $ps.AddScript({
+            param($Root, $Names, $Targets, $Queue, $Sync)
+            function QLog($msg, $color) {
+                $Queue.Enqueue([pscustomobject]@{ Message = $msg; Color = $color; Time = Get-Date })
             }
-            $ready = $false
-            $sw = [Diagnostics.Stopwatch]::StartNew()
-            while ($sw.ElapsedMilliseconds -lt 8000) {
-                if (Get-Process -Name 'winws' -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 400; $ready = $true; break }
-                Start-Sleep -Milliseconds 200
-            }
-            if (-not $ready) {
-                QLog '  winws не стартовал, стратегия пропущена' '#FF8A8A'
-                $report.Add('  START FAILED')
-                if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-                continue
-            }
-            $okCount = 0
-            $errCount = 0
-            foreach ($t in $Targets) {
-                if ($Sync.Cancel) { break }
-                if ($t.Url) {
-                    $tok = @()
-                    foreach ($pair in @(
-                        @{ L = 'HTTP'; A = @('--http1.1') },
-                        @{ L = 'TLS1.2'; A = @('--tlsv1.2', '--tls-max', '1.2') },
-                        @{ L = 'TLS1.3'; A = @('--tlsv1.3', '--tls-max', '1.3') }
-                    )) {
-                        $cargs = @('-I', '-s', '-m', '4', '--connect-timeout', '2', '-o', 'NUL', '-w', '%{http_code}') + $pair.A + @($t.Url)
-                        $null = & curl.exe @cargs 2>&1
-                        if ($LASTEXITCODE -eq 0) { $tok += "$($pair.L):OK"; $okCount++ } else { $tok += "$($pair.L):ERROR"; $errCount++ }
+            function Prefix { return ($Root.TrimEnd('\') + '\') }
+            function StopOwned {
+                $prefix = Prefix
+                foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name = 'winws.exe'" -ErrorAction SilentlyContinue)) {
+                    $path = [string]$p.ExecutablePath
+                    if ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
                     }
-                    $line = "  $($t.Name)  $($tok -join '  ')"
-                    $color = if ($tok -match 'ERROR') { '#FF8A8A' } else { '#3DDC97' }
-                    QLog $line $color
-                    $report.Add($line)
-                } else {
-                    $ms = 'Timeout'
-                    try {
-                        $ping = New-Object Net.NetworkInformation.Ping
-                        $reply = $ping.Send($t.Ping, 1000)
-                        if ($reply.Status -eq 'Success') { $ms = '{0:N0} ms' -f $reply.RoundtripTime }
-                    } catch { }
-                    $line = "  $($t.Name)  Ping: $ms"
-                    QLog $line '#8B9BB4'
-                    $report.Add($line)
                 }
+                Start-Sleep -Milliseconds 250
             }
-            Stop-Winws
-            if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-            $report.Add("  OK=$okCount ERR=$errCount")
-            $report.Add('')
-            QLog "  итог ${name}: OK=$okCount ERR=$errCount" '#6EC6FF'
-            if ($okCount -gt $bestOk) { $bestOk = $okCount; $best = $name }
-        }
-        } catch {
-            QLog "Автотест остановился: $($_.Exception.Message)" '#FF8A8A'
-        } finally {
-            Stop-Winws
-            if ($Sync.Cancel) { $Sync.Cancelled = $true }
-            if ($best) {
-                QLog "Лучшая стратегия: $best (OK=$bestOk)" '#3DDC97'
-                $report.Add("Best strategy: $best")
-                $Sync.Best = $best
+            function WaitOwned([int]$TimeoutMs) {
+                $prefix = Prefix
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
+                    foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name = 'winws.exe'" -ErrorAction SilentlyContinue)) {
+                        $path = [string]$p.ExecutablePath
+                        if ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                            Start-Sleep -Milliseconds 400
+                            return $true
+                        }
+                    }
+                    Start-Sleep -Milliseconds 200
+                }
+                return $false
             }
-            $Sync.Report = [string]::Join([Environment]::NewLine, $report)
-            $Sync.Done = $true
-        }
-    }).AddArgument($root).AddArgument($StrategyNames).AddArgument($targets).AddArgument($queue).AddArgument($sync)
-    $script:TestPs = $ps
-    $script:TestHandle = $ps.BeginInvoke()
+            function Test-UrlCode([string]$Url) {
+                $raw = & curl.exe @('-s', '-o', 'NUL', '-w', '%{http_code}', '-m', '6', '--connect-timeout', '3', '--tlsv1.2', $Url) 2>$null
+                $code = ([string]$raw).Trim()
+                if ($code -notmatch '^\d{3}$') { return '000' }
+                return $code
+            }
+            $report = [System.Collections.Generic.List[string]]::new()
+            $best = $null
+            $bestOk = 0
+            $i = 0
+            try {
+                foreach ($name in $Names) {
+                    $i++
+                    if ($Sync.Cancel) { QLog 'Тест прерван' '#E8C36A'; break }
+                    $Sync.Index = $i
+                    $Sync.Total = $Names.Count
+                    $Sync.Name = [string]$name
+                    $bat = Join-Path $Root $name
+                    QLog ("[{0}/{1}] {2}" -f $i, $Names.Count, $name) '#E8C36A'
+                    $report.Add("Config: $name")
+                    StopOwned
+                    try {
+                        $psi = New-Object Diagnostics.ProcessStartInfo
+                        $psi.FileName = $bat
+                        $psi.WorkingDirectory = $Root
+                        $psi.UseShellExecute = $true
+                        $psi.WindowStyle = 'Hidden'
+                        $p = [Diagnostics.Process]::Start($psi)
+                    } catch {
+                        QLog "  не удалось запустить: $($_.Exception.Message)" '#FF8A8A'
+                        continue
+                    }
+                    if (-not (WaitOwned 8000)) {
+                        QLog '  winws этой сборки не стартовал, стратегия пропущена' '#FF8A8A'
+                        $report.Add('  START FAILED')
+                        if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+                        continue
+                    }
+                    $okCount = 0
+                    foreach ($t in $Targets) {
+                        if ($Sync.Cancel) { break }
+                        $Sync.Name = ('{0} · {1}' -f $name, $t.Name)
+                        $code = Test-UrlCode ([string]$t.Url)
+                        if ($code -ne '000') {
+                            $okCount++
+                            $line = "  $($t.Name)  OK · HTTP $code"
+                            QLog $line '#3DDC97'
+                        } else {
+                            $line = "  $($t.Name)  нет ответа"
+                            QLog $line '#FF8A8A'
+                        }
+                        $report.Add($line)
+                    }
+                    StopOwned
+                    if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+                    $report.Add("  OK=$okCount")
+                    $report.Add('')
+                    QLog "  итог ${name}: OK=$okCount" '#6EC6FF'
+                    if ($okCount -gt $bestOk) { $bestOk = $okCount; $best = $name }
+                }
+            } catch {
+                QLog "Автотест остановился: $($_.Exception.Message)" '#FF8A8A'
+            } finally {
+                StopOwned
+                if ($Sync.Cancel) { $Sync.Cancelled = $true }
+                if ($best -and $bestOk -gt 0) {
+                    QLog "Лучшая стратегия: $best (OK=$bestOk)" '#3DDC97'
+                    $report.Add("Best strategy: $best")
+                    $Sync.Best = $best
+                } else {
+                    QLog 'Ни одна стратегия не открыла Discord или YouTube' '#FF8A8A'
+                }
+                $Sync.Report = [string]::Join([Environment]::NewLine, $report)
+                $Sync.Done = $true
+            }
+        }).AddArgument($root).AddArgument($StrategyNames).AddArgument($targets).AddArgument($queue).AddArgument($sync)
+        $script:TestPs = $ps
+        $script:TestHandle = $ps.BeginInvoke()
+    } catch {
+        Add-Log $_.Exception.Message '#FF8A8A'
+        try { Restore-ZapretRuntimeSnapshot $script:TestSnapshot } catch { }
+        Finish-GuiOperation
+    }
 }
 
 function Complete-StrategyTests {
     if (-not $script:TestSync -or -not $script:TestSync.Done) { return }
+    if ($script:InstallSync) { return }
     try {
-    $best = [string]$script:TestSync.Best
-    $cancelled = [bool]$script:TestSync.Cancelled
-    $auto = [bool]$script:AutoInstallBest
-    $script:TestBusy = $false
-    $script:AutoInstallBest = $false
-    Set-TestUi $false
-    $text = [string]$script:TestSync.Report
-    $saved = Save-TestReport $text
-    if ($saved) { Add-Log "Отчёт сохранён: $saved" '#8B9BB4' }
-    try { $script:TestPs.EndInvoke($script:TestHandle) } catch { }
-    try { $script:TestPs.Dispose() } catch { }
-    try { $script:TestRunspace.Close(); $script:TestRunspace.Dispose() } catch { }
-    $script:TestSync = $null
-    $script:TestPs = $null
-    if ($auto -and -not $cancelled -and $best) {
-        try {
-            $launchDlg = Show-ZapretDialog -Title 'Лучшая стратегия' -Buttons 'OK' -Message "Лучшая стратегия: $best.`nСейчас она будет запущена как служба zapret."
-            Show-BusyOverlay 'Установка службы' "Лучшая стратегия: $best" -1
-            if (Test-ComboHasItem $script:CmbStrategy $best) {
-                $script:CmbStrategy.SelectedItem = $best
-            }
-            Install-ZapretService -StrategyName $best
-            Hide-BusyOverlay
-        } catch {
-            Hide-BusyOverlay
-            Add-Log "Автоустановка службы не удалась: $($_.Exception.Message)" '#FF8A8A'
-        }
-    } else {
-        Hide-BusyOverlay
-        if ($auto -and -not $best) {
-            Add-Log 'Автотест не нашёл рабочую стратегию — служба не установлена.' '#FF8A8A'
-        }
-    }
-    } catch {
-        $script:TestBusy = $false
+        $best = [string]$script:TestSync.Best
+        $cancelled = [bool]$script:TestSync.Cancelled
+        $auto = [bool]$script:AutoInstallBest
+        $text = [string]$script:TestSync.Report
+        $saved = Save-TestReport $text
+        if ($saved) { Add-Log "Отчёт сохранён: $saved" '#8B9BB4' }
+        try { $ended = $script:TestPs.EndInvoke($script:TestHandle) } catch { }
+        try { $script:TestPs.Dispose() } catch { }
+        try { $script:TestRunspace.Close(); $script:TestRunspace.Dispose() } catch { }
         $script:TestSync = $null
-        Hide-BusyOverlay
-        Set-TestUi $false
+        $script:TestPs = $null
+        $winner = $null
+        if (-not $cancelled -and $best) {
+            $winner = Select-BestStrategy @(@{ Name = $best; Ok = 1 })
+        }
+        if ($auto -and $winner) {
+            $launchDlg = Show-ZapretDialog -Title 'Лучшая стратегия' -Buttons 'OK' -Message "Лучшая стратегия: $winner.`nСейчас она будет запущена как служба zapret."
+            try {
+                if (Test-ComboHasItem $script:CmbStrategy $winner) {
+                    $script:StrategyRefreshSilent = $true
+                    try { $script:CmbStrategy.SelectedItem = $winner } finally { $script:StrategyRefreshSilent = $false }
+                }
+                Start-ZapretServiceInstall -StrategyName $winner -Nested
+            } catch {
+                Add-Log "Автоустановка службы не удалась: $($_.Exception.Message)" '#FF8A8A'
+                try { Restore-ZapretRuntimeSnapshot $script:TestSnapshot } catch { }
+                Finish-GuiOperation
+            }
+            return
+        }
+        if ($auto -and -not $winner) {
+            Add-Log 'Автотест не нашёл рабочую стратегию — прежняя служба сохранена.' '#FF8A8A'
+        }
+        try { Restore-ZapretRuntimeSnapshot $script:TestSnapshot } catch {
+            Add-Log $_.Exception.Message '#FF8A8A'
+        }
+        Finish-GuiOperation
+    } catch {
+        $script:TestSync = $null
+        try { Restore-ZapretRuntimeSnapshot $script:TestSnapshot } catch { }
+        Finish-GuiOperation
         Add-Log "Автотест: $($_.Exception.Message)" '#F23F42'
     }
 }
@@ -3500,6 +3925,7 @@ function Set-TestUi {
     $script:BtnStart.IsEnabled = -not $Busy
     $script:BtnRestart.IsEnabled = -not $Busy
     if ($script:BtnSiteTest) { $script:BtnSiteTest.IsEnabled = -not $Busy }
+    if ($script:BtnExclude) { $script:BtnExclude.IsEnabled = -not $Busy }
     if ($script:BtnSiteTestSettings) { $script:BtnSiteTestSettings.IsEnabled = -not $Busy }
     if ($script:BtnSiteTestStart) { $script:BtnSiteTestStart.IsEnabled = -not $Busy }
     if ($script:BtnSiteTestStop) { $script:BtnSiteTestStop.IsEnabled = $Busy }
@@ -3680,7 +4106,7 @@ function Update-SiteTestHint {
 }
 
 function Start-SiteStrategyTests {
-    if ($script:SiteTestBusy -or $script:TestBusy) {
+    if ($script:SiteTestBusy -or $script:TestBusy -or $script:GuiOperationLock) {
         $busyDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message 'Сначала дождитесь окончания текущего теста.'
         return
     }
@@ -3734,6 +4160,7 @@ function Start-SiteStrategyTests {
         $payload.Add(@{ Name = [string]$t.Name; Url = [string]$t.Url })
     }
 
+    $script:GuiOperationLock = $true
     $script:SiteTestBusy = $true
     $script:TestBusy = $true
     $script:SiteTestSnapshot = $snap
@@ -3894,10 +4321,6 @@ function Complete-SiteStrategyTests {
     try { $script:SiteTestRunspace.Close(); $script:SiteTestRunspace.Dispose() } catch { }
     $script:SiteTestSync = $null
     $script:SiteTestPs = $null
-    $script:SiteTestBusy = $false
-    $script:TestBusy = $false
-    $script:SiteTestSnapshot = $null
-    Set-TestUi $false
     if ($script:PrgSiteTest) {
         $script:PrgSiteTest.IsIndeterminate = $false
         $script:PrgSiteTest.Value = 100
@@ -3905,67 +4328,57 @@ function Complete-SiteStrategyTests {
     $saved = Save-TestReport $text
     if ($saved) { Add-SiteTestLog "Отчёт сохранён: $saved" '#8B9BB4' }
 
-    $hasBest = (-not $cancelled -and $best -and $bestOk -gt 0)
-    if ($script:BtnSiteTestApplyBest) { $script:BtnSiteTestApplyBest.IsEnabled = $hasBest }
-    $script:SiteTestBestName = if ($hasBest) { $best } else { '' }
+    $winner = $null
+    if (-not $cancelled) { $winner = Select-BestStrategy @(@{ Name = $best; Ok = $bestOk }) }
+    if ($script:BtnSiteTestApplyBest) { $script:BtnSiteTestApplyBest.IsEnabled = [bool]$winner }
+    $script:SiteTestBestName = if ($winner) { $winner } else { '' }
 
-    if ($cancelled) {
-        if ($script:LblSiteTestStatus) { $script:LblSiteTestStatus.Text = 'Тест прерван. Возвращаю zapret...' }
-        Restore-ZapretRuntimeSnapshot $snap
-        if ($script:LblSiteTestStatus) { $script:LblSiteTestStatus.Text = 'Тест прерван' }
-        Refresh-Status
+    if (-not $winner) {
+        if ($cancelled) {
+            if ($script:LblSiteTestStatus) { $script:LblSiteTestStatus.Text = 'Тест прерван' }
+        } elseif ($script:LblSiteTestStatus) {
+            $script:LblSiteTestStatus.Text = 'Ни одна стратегия не открыла эти сайты'
+        }
+        try { Restore-ZapretRuntimeSnapshot $snap } catch { Add-SiteTestLog $_.Exception.Message '#FF8A8A' }
+        Finish-GuiOperation
         Start-LiveHealthCheck -Force
         return
     }
 
-    if (-not $hasBest) {
-        if ($script:LblSiteTestStatus) { $script:LblSiteTestStatus.Text = 'Ни одна стратегия не открыла эти сайты' }
-        Restore-ZapretRuntimeSnapshot $snap
-        Refresh-Status
-        Start-LiveHealthCheck -Force
-        return
-    }
-
-    if ($script:LblSiteTestStatus) { $script:LblSiteTestStatus.Text = "Лучшая: $best · открылось $bestOk" }
-    $ask = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'YesNo' -Message "Лучшая стратегия для этих сайтов: $best.`nОткрылось $bestOk.`n`nПоставить её службой zapret? Если нет — вернётся прежняя конфигурация."
+    if ($script:LblSiteTestStatus) { $script:LblSiteTestStatus.Text = "Лучшая: $winner · открылось $bestOk" }
+    $ask = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'YesNo' -Message "Лучшая стратегия для этих сайтов: $winner.`nОткрылось $bestOk.`n`nПоставить её службой zapret? Если нет — вернётся прежняя конфигурация."
     if ($ask -eq 'Yes') {
         try {
-            Install-ZapretService -StrategyName $best
-            Add-SiteTestLog "Служба поставлена: $best" '#3DDC97'
+            $script:TestSnapshot = $snap
+            Start-ZapretServiceInstall -StrategyName $winner -Nested
+            Add-SiteTestLog "Ставлю службу: $winner" '#3DDC97'
             if ($script:BtnSiteTestApplyBest) { $script:BtnSiteTestApplyBest.IsEnabled = $false }
         } catch {
             Add-SiteTestLog "Не удалось поставить службу: $($_.Exception.Message)" '#FF8A8A'
-            Restore-ZapretRuntimeSnapshot $snap
+            try { Restore-ZapretRuntimeSnapshot $snap } catch { }
             $errDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message $_.Exception.Message
+            Finish-GuiOperation
         }
-    } else {
-        Restore-ZapretRuntimeSnapshot $snap
+        return
     }
-    Refresh-Status
+    try { Restore-ZapretRuntimeSnapshot $snap } catch { Add-SiteTestLog $_.Exception.Message '#FF8A8A' }
+    Finish-GuiOperation
     Start-LiveHealthCheck -Force
 }
 
 function Stop-Watcher {
-    if ($script:Watcher) {
-        $script:Watcher.EnableRaisingEvents = $false
-        $script:Watcher.Dispose()
-        $script:Watcher = $null
-    }
+    try { $stopped = [ZapretUiHost]::StopPathWatch() } catch { }
+    $script:Watcher = $null
 }
 
 function Start-Watcher {
     Stop-Watcher
     if (-not (Test-Path -LiteralPath $script:Root)) { return }
-    $w = [IO.FileSystemWatcher]::new($script:Root, '*.bat')
-    $w.NotifyFilter = [IO.NotifyFilters]'FileName, LastWrite'
-    $w.EnableRaisingEvents = $true
-    $handler = {
-        if ($script:WatchTimer) { $script:WatchTimer.Stop(); $script:WatchTimer.Start() }
+    try { $started = [ZapretUiHost]::StartPathWatch([string]$script:Root) } catch {
+        Add-Log "Наблюдение за стратегиями: $($_.Exception.Message)" '#E8C36A'
+        return
     }
-    $null = Register-ObjectEvent -InputObject $w -EventName Created -Action $handler
-    $null = Register-ObjectEvent -InputObject $w -EventName Deleted -Action $handler
-    $null = Register-ObjectEvent -InputObject $w -EventName Renamed -Action $handler
-    $script:Watcher = $w
+    $script:Watcher = $true
 }
 
 function Set-ZapretRoot {
@@ -4008,6 +4421,8 @@ function Test-ComboHasItem {
 function Refresh-Strategies {
     if (-not $script:CmbStrategy) { return }
     $prev = [string]$script:CmbStrategy.SelectedItem
+    $script:StrategyRefreshSilent = $true
+    try {
     $script:CmbStrategy.Items.Clear()
     $bats = @(Get-StrategyBats $script:Root)
     foreach ($b in $bats) { $script:CmbStrategy.Items.Add($b.Name) | Out-Null }
@@ -4023,6 +4438,9 @@ function Refresh-Strategies {
     }
     if ($script:LblStrategies) {
         $script:LblStrategies.Text = "Стратегии ($($bats.Count))"
+    }
+    } finally {
+        $script:StrategyRefreshSilent = $false
     }
 }
 
@@ -4082,7 +4500,19 @@ function Refresh-SiteList {
         $script:LblCount.Text = if ($items.Count -eq 0) { 'Список пуст' } else { "Записей: $($items.Count)" }
     }
     if ($script:LblListHint) {
-        if ($info.Wired) {
+        if ($info.Role -eq 'exclude' -and $info.Kind -eq 'host') {
+            $script:LblListHint.Text = if ($info.Wired) {
+                "Не трогать: эти домены zapret не режет. IPv4 всё равно нужен в ipset-exclude-user.txt, иначе сработает фильтр по IP."
+            } else {
+                "Файл $($info.Path) есть, но текущая стратегия его не читает."
+            }
+        } elseif ($info.Role -eq 'exclude' -and $info.Kind -eq 'ip') {
+            $script:LblListHint.Text = if ($info.Wired) {
+                "Не трогать по IP: desync не применяется к этим адресам, даже без имени сайта в TLS."
+            } else {
+                "Файл $($info.Path) есть, но текущая стратегия его не читает."
+            }
+        } elseif ($info.Wired) {
             $script:LblListHint.Text = "Читается файл $($info.Path). Текущая стратегия его использует."
         } else {
             $script:LblListHint.Text = "Читается файл $($info.Path), но выбранная стратегия его не подключает. Для обхода обычно нужен list-general-user.txt."
@@ -4127,6 +4557,10 @@ function Refresh-Status {
         $script:DotStatus.Fill = ConvertTo-Brush '#80848E'
         $script:LblStatus.Text = 'zapret не найден'
         $script:LblStatus.Foreground = ConvertTo-Brush '#B5BAC1'
+    } elseif ($state.OtherWinws) {
+        $script:DotStatus.Fill = ConvertTo-Brush '#E8C36A'
+        $script:LblStatus.Text = 'Не запущен · рядом другой winws'
+        $script:LblStatus.Foreground = ConvertTo-Brush '#F2F3F5'
     } else {
         $script:DotStatus.Fill = ConvertTo-Brush '#F23F42'
         $script:LblStatus.Text = 'Не запущен'
@@ -4151,7 +4585,7 @@ function Refresh-Status {
             $script:LblMode.Text = "$gui Служба zapret $run ($hint)."
         } else {
             $run = if ($state.Running) { 'winws запущен' } else { 'winws не запущен' }
-            $script:LblMode.Text = "$gui Обычный запуск, $run. После обновления zapret нажмите «Сканировать»."
+            $script:LblMode.Text = "$gui Обычный запуск, $run."
         }
     }
 }
@@ -4162,7 +4596,7 @@ function Add-CurrentHost {
     if (-not $info) { throw 'Нет пользовательского списка в этой сборке zapret.' }
     $added = $null
     if ($info.Kind -eq 'ip') {
-        Add-IpEntry -Raw $raw -Path $info.Path
+        $null = Add-IpEntry -Raw $raw -Path $info.Path
         $added = ConvertTo-HostName $raw
         if (-not $added) { $added = $raw.Trim() }
     } else {
@@ -4198,7 +4632,7 @@ function Add-HostEntry {
 }
 
 function Add-IpEntry {
-    param([string]$Raw, [string]$Path)
+    param([string]$Raw, [string]$Path, [switch]$Quiet)
     $value = $Raw.Trim()
     $ips = [System.Collections.Generic.List[string]]::new()
     if ($value -match '^(\d{1,3}(?:\.\d{1,3}){3})(?:/\d{1,2})?$') {
@@ -4223,7 +4657,81 @@ function Add-IpEntry {
     }
     if ($added.Count -eq 0) { throw 'Эти IP уже в списке.' }
     Save-ListEntries -Path $Path -Entries $current.ToArray() -Dummy $script:DummyIp
-    Add-Log ("IP: " + ($added -join ', ')) '#3DDC97'
+    if (-not $Quiet) { Add-Log ("IP: " + ($added -join ', ')) '#3DDC97' }
+    return $added
+}
+
+function Remove-HostFromListFile {
+    param([string]$Path, [string]$HostName, [string]$Dummy, [switch]$KeepComment)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
+    $current = @(Read-ListEntries -Path $Path -Dummy $Dummy)
+    $remain = @($current | Where-Object { -not [string]::Equals($_, $HostName, 'OrdinalIgnoreCase') })
+    if ($remain.Count -eq $current.Count) { return $false }
+    Save-ListEntries -Path $Path -Entries $remain -Dummy $Dummy -KeepComment:$KeepComment
+    return $true
+}
+
+function Add-ExcludeHost {
+    param([string]$Raw)
+    if (-not $script:Lists) { throw 'Папка zapret не подключена.' }
+    $hostName = ConvertTo-HostName $Raw
+    if (-not $hostName) { throw 'Введите домен, который открывается без VPN: manaro.ru или https://manaro.ru/' }
+    if (-not (Test-Path -LiteralPath $script:Lists)) {
+        New-Item -ItemType Directory -Path $script:Lists -Force | Out-Null
+    }
+
+    $excludePath = Join-Path $script:Lists 'list-exclude-user.txt'
+    $ipPath = Join-Path $script:Lists 'ipset-exclude-user.txt'
+    if (-not (Test-Path -LiteralPath $excludePath)) {
+        Save-ListEntries -Path $excludePath -Entries @() -Dummy $script:DummyHost
+    }
+    if (-not (Test-Path -LiteralPath $ipPath)) {
+        Save-ListEntries -Path $ipPath -Entries @() -Dummy $script:DummyIp
+    }
+
+    $current = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in (Read-ListEntries -Path $excludePath -Dummy $script:DummyHost)) { $current.Add($item) }
+    $already = $false
+    foreach ($item in $current) {
+        if ([string]::Equals($item, $hostName, 'OrdinalIgnoreCase')) { $already = $true; break }
+    }
+    if (-not $already) {
+        $current.Add($hostName)
+        Save-ListEntries -Path $excludePath -Entries $current.ToArray() -Dummy $script:DummyHost
+        Add-Log "Не трогать: $hostName → list-exclude-user.txt" '#3DDC97'
+    } else {
+        Add-Log "Домен $hostName уже в исключениях DPI" '#8B9BB4'
+    }
+
+    foreach ($name in @('list-general-user.txt', 'list-google-user.txt')) {
+        $bypassPath = Join-Path $script:Lists $name
+        if (Remove-HostFromListFile -Path $bypassPath -HostName $hostName -Dummy $script:DummyHost -KeepComment) {
+            Add-Log "Убран из обхода ($name): $hostName" '#E8C36A'
+        }
+    }
+
+    try {
+        Add-IpEntry -Raw $hostName -Path $ipPath -Quiet | Out-Null
+        Add-Log "IPv4 $hostName → ipset-exclude-user.txt (без подделки пакетов по IP)" '#3DDC97'
+    } catch {
+        if ($_.Exception.Message -match 'уже') {
+            Add-Log "IPv4 $hostName уже в ipset-exclude-user.txt" '#8B9BB4'
+        } else {
+            Add-Log "IP для $hostName не добавлены: $($_.Exception.Message)" '#E8C36A'
+        }
+    }
+
+    Invoke-LoadUserLists
+    Refresh-SiteList
+    Restart-ZapretIfNeeded
+    return $hostName
+}
+
+function Add-CurrentHostAsExclude {
+    $raw = [string]$script:TxtHost.Text
+    $added = Add-ExcludeHost $raw
+    $script:TxtHost.Clear()
+    return $added
 }
 
 function Remove-SelectedEntry {
@@ -4401,6 +4909,10 @@ $xaml = @'
       <Setter Property="Background" Value="#DA373C"/>
       <Setter Property="Foreground" Value="#FFFFFF"/>
     </Style>
+    <Style x:Key="BtnWarn" TargetType="Button" BasedOn="{StaticResource Btn}">
+      <Setter Property="Background" Value="#A84800"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+    </Style>
   </Window.Resources>
 
   <Grid>
@@ -4525,7 +5037,7 @@ $xaml = @'
         </Border>
       </Grid>
 
-      <Border Grid.Row="2" Background="#2B2D31" Padding="14,12">
+      <Border x:Name="PnlSiteBar" Grid.Row="2" Background="#2B2D31" Padding="14,12" Visibility="Collapsed">
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
@@ -4533,15 +5045,18 @@ $xaml = @'
             <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="8"/>
             <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="8"/>
+            <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
           <Border Background="#1E1F22" CornerRadius="8">
             <Grid>
-              <TextBlock x:Name="TxtHostHint" Text="сайт, который не открывается" Foreground="#6D6F78" VerticalAlignment="Center" Margin="12,0,0,0" IsHitTestVisible="False"/>
-              <TextBox x:Name="TxtHost" Background="Transparent" VerticalContentAlignment="Center" ToolTip="Домен добавится в пользовательский список zapret"/>
+              <TextBlock x:Name="TxtHostHint" Text="не открывается — Добавить; тормозит без VPN — Не трогать" Foreground="#6D6F78" VerticalAlignment="Center" Margin="12,0,0,0" IsHitTestVisible="False"/>
+              <TextBox x:Name="TxtHost" Background="Transparent" VerticalContentAlignment="Center" ToolTip="Добавить сайт — в обход DPI. Не трогать — не подделывать пакеты рабочего сайта"/>
             </Grid>
           </Border>
-          <Button x:Name="BtnAdd" Grid.Column="2" Content="Добавить сайт" Style="{StaticResource BtnAccent}" Margin="0" Padding="18,9"/>
-          <Button x:Name="BtnSiteTest" Grid.Column="4" Content="Тест сайтов" Style="{StaticResource BtnBlurple}" Margin="0" Padding="18,9" ToolTip="Проверить URL разными стратегиями"/>
+          <Button x:Name="BtnAdd" Grid.Column="2" Content="Добавить сайт" Style="{StaticResource BtnAccent}" Margin="0" Padding="18,9" ToolTip="Сайт заблокирован — включить обход DPI"/>
+          <Button x:Name="BtnExclude" Grid.Column="4" Content="Не трогать" Style="{StaticResource BtnWarn}" Margin="0" Padding="18,9" ToolTip="Сайт открывается без VPN, но zapret его режет. Домен и IPv4 уйдут в исключения"/>
+          <Button x:Name="BtnSiteTest" Grid.Column="6" Content="Тест сайтов" Style="{StaticResource BtnBlurple}" Margin="0" Padding="18,9" ToolTip="Проверить URL разными стратегиями"/>
         </Grid>
       </Border>
     </Grid>
@@ -4556,6 +5071,7 @@ $xaml = @'
           <ProgressBar x:Name="PrgOverlay" Minimum="0" Maximum="100" Value="0"/>
           <TextBlock x:Name="LblOverlayPct" Text="" Foreground="#949BA4" HorizontalAlignment="Center" FontSize="12" Margin="0,8,0,16"/>
           <Button x:Name="BtnOverlayRetry" Content="Указать папку вручную" Style="{StaticResource Btn}" Visibility="Collapsed" HorizontalAlignment="Center" Width="240" Margin="0"/>
+          <Button x:Name="BtnOverlayCancel" Content="Остановить" Style="{StaticResource BtnDanger}" Visibility="Collapsed" HorizontalAlignment="Center" Width="240" Margin="0,8,0,0"/>
         </StackPanel>
       </Border>
     </Border>
@@ -4820,13 +5336,13 @@ $xamlSettings = @'
           <TextBox x:Name="TxtPath" Background="Transparent" VerticalContentAlignment="Center"/>
         </Border>
         <Button x:Name="BtnBrowse" Grid.Column="2" Content="Обзор" Style="{StaticResource Btn}" Margin="0,0,6,0" Padding="10,5" Width="Auto"/>
-        <Button x:Name="BtnScan" Grid.Column="3" Content="Сканировать" Style="{StaticResource BtnBlurple}" Margin="0" Padding="10,5" Width="Auto"/>
+        <Button x:Name="BtnScan" Grid.Column="3" Content="Сканировать" Style="{StaticResource BtnBlurple}" Margin="0" Padding="10,5" Width="Auto" Visibility="Collapsed"/>
       </Grid>
     </Border>
     <Grid Grid.Row="1">
       <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="360"/>
         <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="0"/>
       </Grid.ColumnDefinitions>
       <Border Grid.Column="0" Background="#2B2D31" Padding="10,8">
         <Grid>
@@ -4846,7 +5362,7 @@ $xamlSettings = @'
               </Border>
               <TextBlock Text="минут" Foreground="#DCDDDE" VerticalAlignment="Center"/>
             </StackPanel>
-            <TextBlock Text="СЛУЖБА И ТЕСТЫ" Style="{StaticResource Section}"/>
+            <TextBlock Text="УПРАВЛЕНИЕ" Style="{StaticResource Section}"/>
             <Grid>
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -4861,14 +5377,14 @@ $xamlSettings = @'
                 <RowDefinition Height="Auto"/>
               </Grid.RowDefinitions>
               <Button Grid.Row="0" Grid.Column="0" x:Name="BtnRestart" Content="Перезапустить" Style="{StaticResource Btn}"/>
-              <Button Grid.Row="0" Grid.Column="1" x:Name="BtnInstallService" Content="В службу" Style="{StaticResource Btn}" Margin="0,0,0,6" ToolTip="Выбранную стратегию поставить службой"/>
-              <Button Grid.Row="1" Grid.Column="0" x:Name="BtnRemoveService" Content="Снять службу" Style="{StaticResource BtnDanger}"/>
-              <Button Grid.Row="1" Grid.Column="1" x:Name="BtnTestCurrent" Content="Тест текущей" Style="{StaticResource Btn}" Margin="0,0,0,6"/>
-              <Button Grid.Row="2" Grid.Column="0" x:Name="BtnTestAll" Content="Тест всех" Style="{StaticResource Btn}" ToolTip="Тест всех стратегий"/>
-              <Button Grid.Row="2" Grid.Column="1" x:Name="BtnCancelTest" Content="Стоп теста" Style="{StaticResource BtnDanger}" Margin="0,0,0,6" IsEnabled="False" ToolTip="Остановить тест"/>
-              <Button Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" x:Name="BtnAutoBest" Content="Автотест лучшей → служба" Style="{StaticResource BtnBlurple}" Margin="0,0,0,6"/>
-              <Button Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" x:Name="BtnSiteTestSettings" Content="Тест сайтов" Style="{StaticResource Btn}" Margin="0,0,0,6" ToolTip="Проверить свои URL разными стратегиями"/>
-              <Button Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" x:Name="BtnOfficialTest" Content="Консольный тест zapret" Style="{StaticResource Btn}" Margin="0,0,0,0"/>
+              <Button Grid.Row="0" Grid.Column="1" x:Name="BtnInstallService" Content="Включить выбранную" Style="{StaticResource Btn}" Margin="0,0,0,6" ToolTip="Выбранную стратегию поставить службой"/>
+              <Button Grid.Row="1" Grid.Column="0" x:Name="BtnRemoveService" Content="Выключить" Style="{StaticResource BtnDanger}"/>
+              <Button Grid.Row="1" Grid.Column="1" x:Name="BtnTestCurrent" Content="Тест текущей" Style="{StaticResource Btn}" Margin="0,0,0,6" Visibility="Collapsed"/>
+              <Button Grid.Row="2" Grid.Column="0" x:Name="BtnTestAll" Content="Тест всех" Style="{StaticResource Btn}" ToolTip="Тест всех стратегий" Visibility="Collapsed"/>
+              <Button Grid.Row="2" Grid.Column="1" x:Name="BtnCancelTest" Content="Стоп теста" Style="{StaticResource BtnDanger}" Margin="0,0,0,6" IsEnabled="False" ToolTip="Остановить тест" Visibility="Collapsed"/>
+              <Button Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" x:Name="BtnAutoBest" Content="Подобрать лучшую и включить" Style="{StaticResource BtnBlurple}" Margin="0,0,0,6"/>
+              <Button Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" x:Name="BtnSiteTestSettings" Content="Тест сайтов" Style="{StaticResource Btn}" Margin="0,0,0,6" ToolTip="Проверить свои URL разными стратегиями" Visibility="Collapsed"/>
+              <Button Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" x:Name="BtnOfficialTest" Content="Консольный тест zapret" Style="{StaticResource Btn}" Margin="0,0,0,0" Visibility="Collapsed"/>
             </Grid>
           </StackPanel>
           <StackPanel Grid.Row="1" Margin="0,8,0,0">
@@ -4877,7 +5393,7 @@ $xamlSettings = @'
           </StackPanel>
         </Grid>
       </Border>
-      <Border Grid.Column="1" Padding="12,8">
+      <Border x:Name="PnlExtraSettings" Grid.Column="1" Padding="12,8" Visibility="Collapsed">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -5120,12 +5636,12 @@ Bind-GuiNames $window @(
     'DragMain','BtnMinimizeMain','BtnCloseMain',
     'BtnSettings','BtnAbout','BtnBugReport','BtnStart','BtnStop','DotStatus','LblStatus','LblGuiVersion','LblZapretVer','PnlUpdate','LblUpdate','BtnRelease',
     'ImgSettingsGear','TxtSettingsGearFallback',
-    'CardDiscord','CardYoutube','CardCustom','ColHealthCustomGap','ColHealthCustom','PnlDiscord','PnlYoutube','PnlCustom','LblDiscordSummary','LblYoutubeSummary','LblCustomSummary','TxtHost','TxtHostHint','BtnAdd','BtnSiteTest',
-    'PnlOverlay','LblOverlayTitle','LblOverlaySub','PrgOverlay','LblOverlayPct','BtnOverlayRetry'
+    'CardDiscord','CardYoutube','CardCustom','ColHealthCustomGap','ColHealthCustom','PnlDiscord','PnlYoutube','PnlCustom','LblDiscordSummary','LblYoutubeSummary','LblCustomSummary','TxtHost','TxtHostHint','BtnAdd','BtnExclude','BtnSiteTest',
+    'PnlOverlay','LblOverlayTitle','LblOverlaySub','PrgOverlay','LblOverlayPct','BtnOverlayRetry','BtnOverlayCancel','PnlSiteBar'
 )
 Bind-GuiNames $script:SettingsWindow @(
     'DragSettings','BtnMinimizeSettings','BtnCloseSettings',
-    'TxtPath','BtnBrowse','BtnScan','CmbStrategy','BtnRestart','BtnInstallService','BtnRemoveService',
+    'TxtPath','BtnBrowse','BtnScan','CmbStrategy','BtnRestart','BtnInstallService','BtnRemoveService','PnlExtraSettings',
     'BtnAutoBest','BtnTestCurrent','BtnTestAll','BtnCancelTest','BtnSiteTestSettings','BtnOfficialTest','LblStrategies','LblMode',
     'TxtHealthInterval','TxtCustomHealth','TxtCustomHealthHint','BtnAddCustomHealth','LstCustomHealth','BtnRemoveCustomHealth',
     'CmbList','ChkRestart','LblListHint','TxtCheckHost','LstSites','BtnCheckSite','BtnRemove','BtnFolder','LblCount',
@@ -5209,17 +5725,16 @@ function Show-SettingsWindow {
 }
 
 function Invoke-Browse {
-    $d = New-Object Windows.Forms.FolderBrowserDialog
-    $d.Description = 'Укажите папку zapret (там service.bat и стратегии .bat)'
-    if ($script:Root -and (Test-Path -LiteralPath $script:Root)) { $d.SelectedPath = $script:Root }
-    if ($d.ShowDialog() -eq 'OK') {
-        try {
-            Set-ZapretRoot $d.SelectedPath
-            if (-not $script:FirstRunCompleted) { Show-FirstRunStrategyOffer }
-        } catch {
-            Add-Log $_.Exception.Message '#FF8A8A'
-            $warnDlg = Show-ZapretDialog -Title 'ZAPRET GUI' -Buttons 'OK' -Message $_.Exception.Message
-        }
+    $start = ''
+    if ($script:Root -and (Test-Path -LiteralPath $script:Root)) { $start = [string]$script:Root }
+    $picked = [string][ZapretUiHost]::PickFolder('Укажите папку zapret (там service.bat и стратегии .bat)', $start)
+    if ([string]::IsNullOrWhiteSpace($picked)) { return }
+    try {
+        Set-ZapretRoot $picked
+        if (-not $script:FirstRunCompleted) { Show-FirstRunStrategyOffer }
+    } catch {
+        Add-Log $_.Exception.Message '#FF8A8A'
+        $warnDlg = Show-ZapretDialog -Title 'ZAPRET GUI' -Buttons 'OK' -Message $_.Exception.Message
     }
 }
 
@@ -5295,6 +5810,8 @@ $script:TxtPath.Add_KeyDown({
     if ($e.Key -eq 'Return') { $script:BtnScan.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Button]::ClickEvent))) }
 })
 $script:CmbStrategy.Add_SelectionChanged({
+    if ($script:StrategyRefreshSilent) { return }
+    if ([string]::IsNullOrWhiteSpace([string]$script:CmbStrategy.SelectedItem)) { return }
     Refresh-ListCombo
     Refresh-SiteList
     Save-SettingsSafe
@@ -5358,6 +5875,19 @@ $script:BtnAdd.Add_Click({
         $warnDlg = Show-ZapretDialog -Title 'ZAPRET GUI' -Buttons 'OK' -Message $_.Exception.Message
     }
 })
+if ($script:BtnExclude) {
+    $script:BtnExclude.Add_Click({
+        try {
+            $added = Add-CurrentHostAsExclude
+            if ($added) {
+                $okDlg = Show-ZapretDialog -Title 'Не трогать' -Buttons 'OK' -Message "Zapret больше не подделывает пакеты $added (домен и IPv4 в исключениях). Перезагрузите страницу в Chrome без кэша."
+            }
+        } catch {
+            Add-Log $_.Exception.Message '#FF8A8A'
+            $warnDlg = Show-ZapretDialog -Title 'Не трогать' -Buttons 'OK' -Message $_.Exception.Message
+        }
+    })
+}
 if ($script:BtnSiteTest) {
     $script:BtnSiteTest.Add_Click({
         try { Show-SiteTestWindow } catch {
@@ -5382,11 +5912,16 @@ if ($script:BtnSiteTestApplyBest) {
     $script:BtnSiteTestApplyBest.Add_Click({
         $name = [string]$script:SiteTestBestName
         if (-not $name) { return }
+        if ($script:GuiOperationLock) { return }
+        $script:GuiOperationLock = $true
+        $script:TestSnapshot = Get-ZapretRuntimeSnapshot
         try {
-            Install-ZapretService -StrategyName $name
-            Add-SiteTestLog "Служба поставлена: $name" '#3DDC97'
+            Start-ZapretServiceInstall -StrategyName $name -Nested
+            Add-SiteTestLog "Ставлю службу: $name" '#3DDC97'
             $script:BtnSiteTestApplyBest.IsEnabled = $false
         } catch {
+            try { Restore-ZapretRuntimeSnapshot $script:TestSnapshot } catch { }
+            Exit-GuiOperation
             Add-SiteTestLog $_.Exception.Message '#FF8A8A'
             $warnDlg = Show-ZapretDialog -Title 'Тест сайтов' -Buttons 'OK' -Message $_.Exception.Message
         }
@@ -5424,7 +5959,6 @@ $script:BtnFolder.Add_Click({
 $script:BtnStart.Add_Click({
     try {
         Start-ZapretFromMain
-        Start-Sleep -Milliseconds 700
         Refresh-Status
     } catch {
         Add-Log $_.Exception.Message '#FF8A8A'
@@ -5445,10 +5979,8 @@ $script:BtnRestart.Add_Click({
             Add-Log 'Служба перезапущена' '#3DDC97'
         } else {
             Stop-Zapret -Quiet
-            Start-Sleep -Milliseconds 400
             Start-StrategyFile ([string]$script:CmbStrategy.SelectedItem)
         }
-        Start-Sleep -Milliseconds 700
         Refresh-Status
         Start-LiveHealthCheck -Force
     } catch {
@@ -5458,18 +5990,10 @@ $script:BtnRestart.Add_Click({
 })
 $script:BtnRemoveService.Add_Click({
     try {
-        $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
-        if ($svc) {
-            Stop-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
-            sc.exe delete zapret | Out-Null
-        }
-        Stop-Zapret -Quiet
-        foreach ($name in @('WinDivert', 'WinDivert14')) {
-            sc.exe stop $name 2>$null | Out-Null
-            sc.exe delete $name 2>$null | Out-Null
-        }
-        Add-Log 'Служба zapret снята' '#E8C36A'
+        Stop-Zapret
+        Add-Log 'Обход выключен' '#E8C36A'
         Refresh-Status
+        Start-LiveHealthCheck -Force
     } catch { Add-Log $_.Exception.Message '#FF8A8A' }
 })
 $script:BtnTestCurrent.Add_Click({
@@ -5491,7 +6015,7 @@ $script:BtnAutoBest.Add_Click({
 $script:BtnInstallService.Add_Click({
     $name = [string]$script:CmbStrategy.SelectedItem
     if (-not $name) { Add-Log 'Сначала выберите стратегию' '#F0B232'; return }
-    try { Install-ZapretService -StrategyName $name } catch {
+    try { Start-ZapretServiceInstall -StrategyName $name } catch {
         Add-Log $_.Exception.Message '#F23F42'
         $warnDlg = Show-ZapretDialog -Title 'ZAPRET GUI' -Buttons 'OK' -Message $_.Exception.Message
     }
@@ -5544,6 +6068,15 @@ $script:BtnCopyLog.Add_Click({
     Add-Log 'Лог скопирован' '#8B9BB4'
 })
 $script:BtnRelease.Add_Click({ Start-Process $script:GithubReleasesUrl })
+if ($script:BtnOverlayCancel) {
+    $script:BtnOverlayCancel.Add_Click({
+        if ($script:TestSync) { $script:TestSync.Cancel = $true }
+        if ($script:SiteTestSync) { $script:SiteTestSync.Cancel = $true }
+        if ($script:InstallSync) { $script:InstallSync.Cancel = $true }
+        $script:TestCancel = $true
+        Add-Log 'Остановка...' '#E8C36A'
+    })
+}
 if ($script:BtnOverlayRetry) {
     $script:BtnOverlayRetry.Add_Click({
         Hide-BusyOverlay
@@ -5557,9 +6090,37 @@ if ($script:BtnOverlayRetry) {
     })
 }
 
+function Invoke-UiProbe {
+    $fails = [System.Collections.Generic.List[string]]::new()
+    if (-not $script:PnlSiteBar -or $script:PnlSiteBar.Visibility -ne 'Collapsed') { $fails.Add('site bar') }
+    if (-not $script:BtnScan -or $script:BtnScan.Visibility -ne 'Collapsed') { $fails.Add('scan') }
+    foreach ($name in @('BtnTestCurrent', 'BtnTestAll', 'BtnCancelTest', 'BtnSiteTestSettings', 'BtnOfficialTest')) {
+        $control = Get-Variable -Name $name -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if (-not $control -or $control.Visibility -ne 'Collapsed') { $fails.Add($name) }
+    }
+    if (-not $script:PnlExtraSettings -or $script:PnlExtraSettings.Visibility -ne 'Collapsed') { $fails.Add('extra settings') }
+    if (-not $script:BtnOverlayCancel) { $fails.Add('overlay cancel') }
+    if (-not $script:BtnAutoBest -or [string]$script:BtnAutoBest.Content -ne 'Подобрать лучшую и включить') { $fails.Add('auto label') }
+    try { $shownSettings = [ZapretUiHost]::ShowSettings() } catch { $fails.Add('show settings') }
+    Show-BusyOverlay 'Проверка' 'probe' -1 -AllowCancel
+    if ([bool][ZapretUiHost]::SettingsIsVisible()) { $fails.Add('overlay hides settings') }
+    if (-not $script:PnlOverlay -or $script:PnlOverlay.Visibility -ne 'Visible') { $fails.Add('overlay visible') }
+    if (-not $script:BtnOverlayCancel -or $script:BtnOverlayCancel.Visibility -ne 'Visible') { $fails.Add('cancel visible') }
+    Hide-BusyOverlay
+    if (-not [bool][ZapretUiHost]::SettingsIsVisible()) { $fails.Add('settings restored') }
+    $path = Join-Path ([IO.Path]::GetTempPath()) 'ZapretGUI-uiprobe.txt'
+    $text = if ($fails.Count -eq 0) { 'OK' } else { 'FAIL ' + ($fails -join '; ') }
+    [IO.File]::WriteAllText($path, $text, [Text.UTF8Encoding]::new($false))
+    [Environment]::Exit($(if ($fails.Count -eq 0) { 0 } else { 2 }))
+}
+
 $window.Add_Loaded({
     try {
         try { $attachedSettings = [ZapretUiHost]::AttachSettingsOwner() } catch { }
+        if ($script:UiProbe) {
+            $queuedProbe = $window.Dispatcher.BeginInvoke([Action]{ Invoke-UiProbe })
+            return
+        }
         try { $attachedSite = [ZapretUiHost]::AttachSiteTestOwner() } catch { }
         if ($script:TxtHost) { $script:TxtHost.Focus() }
         Add-Log 'Ищу zapret рядом с программой...' '#B5BAC1'
@@ -5679,6 +6240,7 @@ $uiTimer = New-Object Windows.Threading.DispatcherTimer
 $uiTimer.Interval = [TimeSpan]::FromMilliseconds(250)
 $uiTimer.Add_Tick({
     try {
+        if ($script:UiProbe) { return }
         Flush-LogQueue
         Flush-SiteTestLogQueue
         Update-BusyOverlayFromState
@@ -5689,8 +6251,17 @@ $uiTimer.Add_Tick({
         Complete-GithubCheck
         Complete-GuiUpdateCheck
         Complete-GuiSelfUpdate
+        Complete-ZapretServiceInstall
         Complete-LiveHealthCheck
-        if (-not $script:Restarting -and -not $script:TestBusy -and -not $script:SiteTestBusy) { Refresh-Status }
+        if ([ZapretUiHost]::TakeExitRequest()) { Exit-ZapretGui }
+        if ([ZapretUiHost]::TakeWatchRefresh()) {
+            if ($script:WatchTimer) { $script:WatchTimer.Stop(); $script:WatchTimer.Start() }
+        }
+        $statusBusy = $script:Restarting -or $script:TestBusy -or $script:SiteTestBusy -or $script:GuiOperationLock
+        if (-not $statusBusy -and (Get-Date) -ge $script:NextStatusRefreshAt) {
+            $script:NextStatusRefreshAt = (Get-Date).AddSeconds(2)
+            Refresh-Status
+        }
         $now = Get-Date
         if ($now -ge $script:NextHealthCheckAt) {
             $script:NextHealthCheckAt = $now.AddMinutes($script:HealthIntervalMinutes)
@@ -5736,6 +6307,7 @@ $window.Add_Closed({
 })
 
 try {
+    $startedWatch = [ZapretSingleInstance]::StartShowWatcher()
     if ($script:StartInTray) {
         $window.ShowInTaskbar = $false
         $window.WindowState = [Windows.WindowState]::Minimized

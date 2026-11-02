@@ -22,3 +22,4 @@ This repo is a **GUI wrapper** around Flowseal `zapret-discord-youtube`. Officia
 - A valid explicitly saved `ZapretPath` takes precedence over nearby-folder discovery.
 - Treat `zapret-discord-youtube-*` as external runtime data and `%APPDATA%\ZapretGUI\settings.json` as machine-local state: do not edit or commit either. Launch only the root wrapper/packaged EXE, never stale `zapret-gui.*` copies inside a zapret package.
 - **GitHub is not automatic.** Do not `git push`, create/edit GitHub Releases, or upload EXE/zip to GitHub unless the user explicitly asks in that message. Builds stay in local `dist/`.
+- **Never edit the GitHub repository About** (the description on the repo home page, `gh repo edit --description`). If the user asks to add personal text to a «описание», change only the README pitch and/or that version’s release notes. Do not touch About unless they explicitly name the About field.

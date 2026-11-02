@@ -24,6 +24,18 @@
   <img src="docs/screenshots/settings-1.0.28.png" alt="Окно настроек ZAPRET GUI" width="820">
 </p>
 
+### Новое в 1.0.30
+
+- Подбор стратегии больше не остаётся под окном настроек
+- Автотест считает только Discord и YouTube и не включает стратегию, которая ничего не открыла
+- Если тест отменён или ничего не открылось, возвращается прежняя служба
+- На главном окне скрыты «Добавить сайт», «Не трогать» и «Тест сайтов». В настройках остались папка, стратегия, подбор лучшей, включение, перезапуск, выключение и лог
+
+### Новое в 1.0.29
+
+- Кнопка **Не трогать**: рабочий без VPN сайт не подделывается DPI (домен + IPv4 в пользовательских exclude-списках). В 1.0.30 кнопка скрыта, списки на месте
+- Повторный запуск достаёт окно из трея, а не показывает «уже запущена»
+
 ### Новое в 1.0.28
 
 - Опрос своих сайтов и серверов: список задаётся в настройках, на главном окне появляется третья колонка. Если адресов нет — видны только Discord и YouTube
@@ -47,8 +59,7 @@
 - Свои адреса для опроса в настройках (третья колонка на главном окне, если список не пуст)
 - Настройки хранятся в `%APPDATA%\ZapretGUI`, а не рядом с EXE
 - Автоподбор лучшей стратегии и установка её службой
-- Добавление сайтов только в пользовательские списки (`*user*.txt`)
-- Тест своих URL разными стратегиями (кнопка «Тест сайтов»)
+- Добавление сайтов только в пользовательские списки (`*user*.txt`). Кнопки «Добавить сайт», «Не трогать» и «Тест сайтов» в 1.0.30 скрыты, уже записанные списки сохраняются
 - Кнопка «О программе»: версия, дата выпуска, разработчик и проверка обновления на GitHub
 - Жучок «Сообщить об ошибке»: открывается GitHub Issues, лог копируется в буфер обмена
 - Автопроверка новой версии самой оболочки на GitHub (скачивание с прогрессом и перезапуск)
@@ -138,6 +149,17 @@ The GUI connects a zapret folder, installs the chosen strategy as a Windows serv
 
 By default the app **registers itself in Windows Startup**. The close button **hides the window to the tray**; bypass keeps running.
 
+### What's new in 1.0.30
+
+- Strategy search no longer stays behind the settings window
+- The autotest scores only Discord and YouTube and will not enable a strategy that opened nothing
+- A cancelled test, or one where nothing opened, restores the previous service
+- The main window hides Add site, Leave alone, and Test sites. Settings keep the folder, strategy, best-strategy pick, enable, restart, stop, and the log
+
+### What's new in 1.0.29
+
+- **Leave alone** button: sites that already work without VPN are excluded from DPI desync (host + IPv4 user exclude lists). The button is hidden in 1.0.30; saved lists stay
+
 ### What's new in 1.0.28
 
 - Poll your own sites and servers: the list is in Settings, and a third column appears on the main window. If the list is empty, only Discord and YouTube are shown
@@ -151,8 +173,7 @@ By default the app **registers itself in Windows Startup**. The close button **h
 - Custom poll hosts in Settings (third main-window column only when the list is not empty)
 - Settings live in `%APPDATA%\ZapretGUI`, not next to the EXE
 - Auto-test strategies and install the best one as a service
-- Add sites only to user lists (`*user*.txt`)
-- Test your own URLs against every strategy (the **Test sites** button)
+- Add sites only to user lists (`*user*.txt`). Add site, Leave alone, and Test sites are hidden in 1.0.30; lists already saved are kept
 - **About** button: wrapper version, release date, developer, and a GitHub update check
 - Bug-report beetle: opens a GitHub issue and copies the log to the clipboard
 - Daily self-update check for the GUI on GitHub (download progress, then restart)

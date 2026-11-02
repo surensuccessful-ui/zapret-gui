@@ -20,6 +20,7 @@ description: >-
 
 - **Versions:** wrapper version is `VERSION` in the project root (shown as GUI x.y.z). Zapret package version comes from `LOCAL_VERSION` in `service.bat`. Running state is scanned from service `zapret` and process `winws` (path matched to the connected folder).
 - When GUI behavior changes: bump `VERSION` and add an entry to `CHANGELOG.md`. Pack the EXE with `build-exe.ps1` into local `dist/`. Do not `git push` or publish a GitHub Release unless the user explicitly asks.
+- **Never edit GitHub About** (`gh repo edit --description` / the description on the repo home page). Personal text for a «описание» goes in the README and/or that release’s notes only.
 - Restore a snapshot: `git checkout vX.Y.Z`. Do not move or delete existing tags (`v1.0.20` is the first public snapshot).
 - Releases API for the zapret engine zip. Overlay shows download progress. Remember path in `%APPDATA%\ZapretGUI\settings.json`.
 

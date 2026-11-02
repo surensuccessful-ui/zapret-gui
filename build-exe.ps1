@@ -126,6 +126,21 @@ try {
     if (-not $source.Contains($dateFallback)) {
         throw 'Unable to embed the GUI release date into the compiled script.'
     }
+    $logicPath = Join-Path $PSScriptRoot 'zapret-gui-logic.ps1'
+    if (-not (Test-Path -LiteralPath $logicPath -PathType Leaf)) {
+        throw "Required file not found: $logicPath"
+    }
+    $logicStart = $source.IndexOf('# <gui-logic-inline>')
+    $logicEndMarker = '# </gui-logic-inline>'
+    $logicEnd = $source.IndexOf($logicEndMarker)
+    if ($logicStart -lt 0 -or $logicEnd -lt $logicStart) {
+        throw 'Unable to find the GUI logic inline markers.'
+    }
+    $logicBody = [IO.File]::ReadAllText($logicPath).Trim()
+    $source = $source.Remove($logicStart, ($logicEnd + $logicEndMarker.Length) - $logicStart).Insert($logicStart, $logicBody)
+    if ($source.Contains('# <gui-logic-inline>') -or $source.Contains('zapret-gui-logic.ps1')) {
+        throw 'Unable to inline zapret-gui-logic.ps1 into the compiled script.'
+    }
     $gearAssign = '$script:EmbeddedSettingsGearPngBase64 = [string]::Empty'
     if (-not $source.Contains($gearAssign)) {
         throw 'Unable to find the settings-gear embed assignment in the compiled script.'
