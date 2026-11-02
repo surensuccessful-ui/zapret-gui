@@ -147,6 +147,29 @@ try {
     }
     $gearBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($gearPath))
     $source = $source.Replace($gearAssign, ('$script:EmbeddedSettingsGearPngBase64 = ''{0}''' -f $gearBase64))
+    $iconDir = Join-Path $PSScriptRoot 'assets\ui'
+    foreach ($iconName in @('Brand', 'Gear', 'Info', 'Puzzle', 'Discord', 'Youtube')) {
+        $iconPath = Join-Path $iconDir ($iconName.ToLower() + '.png')
+        if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) {
+            throw "Required icon not found: $iconPath"
+        }
+        $iconMarker = '$script:EmbeddedUiIcon' + $iconName + " = ''"
+        if (-not $source.Contains($iconMarker)) {
+            throw "Unable to find the UI icon embed assignment for $iconName."
+        }
+        $iconBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($iconPath))
+        $source = $source.Replace($iconMarker, ('$script:EmbeddedUiIcon{0} = ''{1}''' -f $iconName, $iconBase64))
+    }
+    $trayPath = Join-Path $iconDir 'tray-gear.ico'
+    $trayMarker = '$script:EmbeddedTrayGearIco = '''''
+    if (-not (Test-Path -LiteralPath $trayPath -PathType Leaf)) {
+        throw "Required icon not found: $trayPath"
+    }
+    if (-not $source.Contains($trayMarker)) {
+        throw 'Unable to find the tray gear embed assignment.'
+    }
+    $trayBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($trayPath))
+    $source = $source.Replace($trayMarker, ('$script:EmbeddedTrayGearIco = ''{0}''' -f $trayBase64))
     if ($source.Contains($gearAssign)) {
         throw 'Unable to embed settings-gear.png into the compiled script.'
     }

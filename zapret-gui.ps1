@@ -865,6 +865,13 @@ function Format-GuiReleaseDate {
 }
 $script:GuiReleaseDate = Get-GuiReleaseDate
 $script:EmbeddedSettingsGearPngBase64 = [string]::Empty
+$script:EmbeddedUiIconBrand = ''
+$script:EmbeddedUiIconGear = ''
+$script:EmbeddedUiIconInfo = ''
+$script:EmbeddedUiIconPuzzle = ''
+$script:EmbeddedUiIconDiscord = ''
+$script:EmbeddedUiIconYoutube = ''
+$script:EmbeddedTrayGearIco = ''
 
 function ConvertTo-PlainSettingsTable {
     param($Obj, [int]$Depth = 0)
@@ -4921,10 +4928,10 @@ $xaml = @'
       <RowDefinition Height="*"/>
     </Grid.RowDefinitions>
     <Grid.ColumnDefinitions>
-      <ColumnDefinition Width="48"/>
+      <ColumnDefinition Width="76"/>
       <ColumnDefinition Width="*"/>
     </Grid.ColumnDefinitions>
-    <Border Grid.Row="0" Grid.ColumnSpan="2" Background="#202225" Padding="0" SnapsToDevicePixels="True">
+    <Border Grid.Row="0" Grid.ColumnSpan="2" Background="#17181C" Padding="0" SnapsToDevicePixels="True">
       <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*"/>
@@ -4938,28 +4945,31 @@ $xaml = @'
         <Button Grid.Column="2" x:Name="BtnCloseMain" Content="×" Style="{StaticResource Btn}" Template="{StaticResource BtnTplSquare}" Width="Auto" Height="34" Margin="0" Padding="0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#B83A3A" Foreground="White" FontSize="17"/>
       </Grid>
     </Border>
-    <Border Grid.Row="1" Grid.Column="0" Background="#1E1F22">
+    <Border Grid.Row="1" Grid.Column="0" Background="#17181C">
       <StackPanel Margin="0,12,0,0" HorizontalAlignment="Center">
-        <Border Width="36" Height="36" CornerRadius="18" Background="#5865F2">
-          <TextBlock Text="Z" Foreground="White" FontWeight="Bold" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-        </Border>
-        <Border Width="32" Height="2" Background="#35373C" Margin="0,10,0,10" CornerRadius="1"/>
-        <Button x:Name="BtnSettings" ToolTip="Настройки" Style="{StaticResource Btn}" Width="36" Height="36" Margin="0" Padding="0" Background="#2B2D31">
+        <Grid Width="56" Height="56">
+          <Border x:Name="BrandFallback" Width="56" Height="56" CornerRadius="16" Background="#5865F2">
+            <TextBlock Text="Z" Foreground="White" FontWeight="Bold" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <Image x:Name="ImgBrand" Width="56" Height="56" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" Visibility="Collapsed"/>
+        </Grid>
+        <Button x:Name="BtnSettings" ToolTip="Настройки" Style="{StaticResource Btn}" Width="56" Height="56" Margin="0,14,0,0" Padding="0" Background="Transparent">
           <Grid>
-            <Image x:Name="ImgSettingsGear" Width="22" Height="22" Stretch="Uniform" Visibility="Collapsed"/>
+            <Image x:Name="ImgSettingsGear" Width="56" Height="56" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" Visibility="Collapsed"/>
             <TextBlock x:Name="TxtSettingsGearFallback" Text="⚙" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
           </Grid>
         </Button>
-        <Button x:Name="BtnAbout" ToolTip="О программе" Style="{StaticResource Btn}" Width="36" Height="36" Margin="0,10,0,0" Padding="0" Background="#2B2D31">
-          <Viewbox Width="22" Height="22">
-            <Grid Width="24" Height="24">
-              <Ellipse Stroke="#DBDEE1" StrokeThickness="1.8" Fill="Transparent"/>
-              <TextBlock Text="i" FontFamily="Georgia" FontSize="14" FontWeight="Bold" FontStyle="Italic" Foreground="#DBDEE1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
-            </Grid>
-          </Viewbox>
+        <Button x:Name="BtnAbout" ToolTip="О программе" Style="{StaticResource Btn}" Width="56" Height="56" Margin="0,12,0,0" Padding="0" Background="Transparent">
+          <Grid>
+            <Image x:Name="ImgAbout" Width="56" Height="56" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" Visibility="Collapsed"/>
+            <TextBlock x:Name="TxtAboutFallback" Text="i" FontFamily="Georgia" FontSize="16" FontStyle="Italic" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
         </Button>
-        <Button x:Name="BtnBugReport" ToolTip="Сообщить об ошибке" Style="{StaticResource Btn}" Width="36" Height="36" Margin="0,10,0,0" Padding="0" Background="#2B2D31">
-          <TextBlock FontFamily="Segoe UI Emoji" Text="🐞" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        <Button x:Name="BtnBugReport" ToolTip="Сообщить об ошибке" Style="{StaticResource Btn}" Width="56" Height="56" Margin="0,12,0,0" Padding="0" Background="Transparent">
+          <Grid>
+            <Image x:Name="ImgBug" Width="56" Height="56" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" Visibility="Collapsed"/>
+            <TextBlock x:Name="TxtBugFallback" FontFamily="Segoe UI Emoji" Text="🐞" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
         </Button>
       </StackPanel>
     </Border>
@@ -5008,7 +5018,8 @@ $xaml = @'
         <Border x:Name="CardDiscord" Grid.Column="0" Background="#2B2D31" CornerRadius="8" Padding="16" Cursor="Hand" ToolTip="Нажмите, чтобы проверить сейчас">
           <DockPanel>
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
-              <Ellipse Width="8" Height="8" Fill="#5865F2" VerticalAlignment="Center" Margin="0,0,8,0"/>
+              <Image x:Name="ImgDiscordMark" Width="48" Height="44" Margin="0,0,10,0" VerticalAlignment="Center" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" Visibility="Collapsed"/>
+              <Ellipse x:Name="DotDiscord" Width="8" Height="8" Fill="#5865F2" VerticalAlignment="Center" Margin="0,0,8,0"/>
               <TextBlock Text="DISCORD" FontWeight="Bold" FontSize="12" Foreground="#DCDDDE" VerticalAlignment="Center"/>
               <TextBlock x:Name="LblDiscordSummary" Text="" Foreground="#DCDDDE" FontSize="12" Margin="8,0,0,0" VerticalAlignment="Center"/>
             </StackPanel>
@@ -5018,7 +5029,8 @@ $xaml = @'
         <Border x:Name="CardYoutube" Grid.Column="2" Background="#2B2D31" CornerRadius="8" Padding="16" Cursor="Hand" ToolTip="Нажмите, чтобы проверить сейчас">
           <DockPanel>
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
-              <Ellipse Width="8" Height="8" Fill="#F23F42" VerticalAlignment="Center" Margin="0,0,8,0"/>
+              <Image x:Name="ImgYoutubeMark" Width="48" Height="44" Margin="0,0,10,0" VerticalAlignment="Center" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" Visibility="Collapsed"/>
+              <Ellipse x:Name="DotYoutube" Width="8" Height="8" Fill="#F23F42" VerticalAlignment="Center" Margin="0,0,8,0"/>
               <TextBlock Text="YOUTUBE" FontWeight="Bold" FontSize="12" Foreground="#DCDDDE" VerticalAlignment="Center"/>
               <TextBlock x:Name="LblYoutubeSummary" Text="" Foreground="#DCDDDE" FontSize="12" Margin="8,0,0,0" VerticalAlignment="Center"/>
             </StackPanel>
@@ -5063,7 +5075,8 @@ $xaml = @'
     <Border x:Name="PnlOverlay" Grid.Row="1" Grid.ColumnSpan="2" Visibility="Collapsed" Background="#E61E1F22" Panel.ZIndex="80">
       <Border Width="440" HorizontalAlignment="Center" VerticalAlignment="Center" Background="#2B2D31" CornerRadius="12" Padding="28,26">
         <StackPanel>
-          <Border Width="48" Height="48" CornerRadius="24" Background="#5865F2" HorizontalAlignment="Center" Margin="0,0,0,16">
+          <Image x:Name="ImgOverlayBrand" Width="64" Height="64" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,0,0,16" Visibility="Collapsed"/>
+          <Border x:Name="OverlayBrandFallback" Width="48" Height="48" CornerRadius="24" Background="#5865F2" HorizontalAlignment="Center" Margin="0,0,0,16">
             <TextBlock Text="Z" Foreground="White" FontWeight="Bold" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center"/>
           </Border>
           <TextBlock x:Name="LblOverlayTitle" Text="Подготовка zapret" FontSize="18" FontWeight="Bold" Foreground="#F2F3F5" HorizontalAlignment="Center" Margin="0,0,0,8"/>
@@ -5635,7 +5648,7 @@ function Bind-GuiNames {
 Bind-GuiNames $window @(
     'DragMain','BtnMinimizeMain','BtnCloseMain',
     'BtnSettings','BtnAbout','BtnBugReport','BtnStart','BtnStop','DotStatus','LblStatus','LblGuiVersion','LblZapretVer','PnlUpdate','LblUpdate','BtnRelease',
-    'ImgSettingsGear','TxtSettingsGearFallback',
+    'ImgSettingsGear','TxtSettingsGearFallback','ImgBrand','BrandFallback','ImgAbout','TxtAboutFallback','ImgBug','TxtBugFallback','ImgDiscordMark','DotDiscord','ImgYoutubeMark','DotYoutube','ImgOverlayBrand','OverlayBrandFallback',
     'CardDiscord','CardYoutube','CardCustom','ColHealthCustomGap','ColHealthCustom','PnlDiscord','PnlYoutube','PnlCustom','LblDiscordSummary','LblYoutubeSummary','LblCustomSummary','TxtHost','TxtHostHint','BtnAdd','BtnExclude','BtnSiteTest',
     'PnlOverlay','LblOverlayTitle','LblOverlaySub','PrgOverlay','LblOverlayPct','BtnOverlayRetry','BtnOverlayCancel','PnlSiteBar'
 )
@@ -5655,6 +5668,92 @@ Bind-GuiNames $script:SiteTestWindow @(
 $window.Title = "ZAPRET  $($script:GuiVersion)"
 if ($script:SettingsWindow) { $script:SettingsWindow.Title = "Настройки · GUI $($script:GuiVersion)" }
 if ($script:LblGuiVersion) { $script:LblGuiVersion.Text = "GUI $($script:GuiVersion)" }
+function Get-UiIconImage {
+    param([string]$Name)
+    $fileName = switch ($Name) {
+        'Brand' { 'brand.png' }
+        'Gear' { 'gear.png' }
+        'Info' { 'info.png' }
+        'Puzzle' { 'puzzle.png' }
+        'Discord' { 'discord.png' }
+        'Youtube' { 'youtube.png' }
+        default { return $null }
+    }
+    $embedded = switch ($Name) {
+        'Brand' { [string]$script:EmbeddedUiIconBrand }
+        'Gear' { [string]$script:EmbeddedUiIconGear }
+        'Info' { [string]$script:EmbeddedUiIconInfo }
+        'Puzzle' { [string]$script:EmbeddedUiIconPuzzle }
+        'Discord' { [string]$script:EmbeddedUiIconDiscord }
+        'Youtube' { [string]$script:EmbeddedUiIconYoutube }
+        default { '' }
+    }
+    $filePath = Join-Path $script:AppDir ('assets\ui\' + $fileName)
+    $hasFile = Test-Path -LiteralPath $filePath -PathType Leaf
+    if (-not $hasFile -and [string]::IsNullOrWhiteSpace($embedded)) { return $null }
+    $stream = $null
+    try {
+        $icon = [Windows.Media.Imaging.BitmapImage]::new()
+        $icon.BeginInit()
+        $icon.CacheOption = [Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+        if ($hasFile) {
+            $icon.UriSource = [Uri]::new($filePath, [UriKind]::Absolute)
+        } else {
+            $stream = [IO.MemoryStream]::new([Convert]::FromBase64String($embedded))
+            $icon.StreamSource = $stream
+        }
+        $icon.EndInit()
+        $icon.Freeze()
+        return $icon
+    } finally {
+        if ($stream) { $stream.Dispose() }
+    }
+}
+
+function Set-UiIcon {
+    param($Image, [string]$Name, $Fallback)
+    $icon = Get-UiIconImage $Name
+    if (-not $icon -or -not $Image) { return $null }
+    $Image.Source = $icon
+    $Image.Visibility = 'Visible'
+    if ($Fallback) { $Fallback.Visibility = 'Collapsed' }
+    return $icon
+}
+
+function Apply-UiIcons {
+    $brand = Set-UiIcon $script:ImgBrand 'Brand' $script:BrandFallback
+    $gear = Set-UiIcon $script:ImgSettingsGear 'Gear' $script:TxtSettingsGearFallback
+    $about = Set-UiIcon $script:ImgAbout 'Info' $script:TxtAboutFallback
+    $bug = Set-UiIcon $script:ImgBug 'Puzzle' $script:TxtBugFallback
+    $discord = Set-UiIcon $script:ImgDiscordMark 'Discord' $script:DotDiscord
+    $youtube = Set-UiIcon $script:ImgYoutubeMark 'Youtube' $script:DotYoutube
+    $overlay = Set-UiIcon $script:ImgOverlayBrand 'Brand' $script:OverlayBrandFallback
+    $windowIcon = $brand
+    if (-not $windowIcon) { $windowIcon = $gear }
+    if ($windowIcon) {
+        if ($window) { $window.Icon = $windowIcon }
+        if ($script:SettingsWindow) { $script:SettingsWindow.Icon = $windowIcon }
+        if ($script:SiteTestWindow) { $script:SiteTestWindow.Icon = $windowIcon }
+    }
+    Set-TrayGearIcon
+}
+
+function Set-TrayGearIcon {
+    if (-not $script:TrayIcon) { return }
+    $icoPath = Join-Path $script:AppDir 'assets\ui\tray-gear.ico'
+    $loaded = $null
+    if (Test-Path -LiteralPath $icoPath -PathType Leaf) {
+        $loaded = [System.Drawing.Icon]::new($icoPath)
+    } else {
+        $raw = [string]$script:EmbeddedTrayGearIco
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            $script:TrayIconStream = [IO.MemoryStream]::new([Convert]::FromBase64String($raw))
+            $loaded = [System.Drawing.Icon]::new($script:TrayIconStream)
+        }
+    }
+    if ($loaded) { $script:TrayIcon.Icon = $loaded }
+}
+
 function Get-SettingsGearImage {
     $filePath = Join-Path $script:AppDir 'settings-gear.png'
     $hasFile = Test-Path -LiteralPath $filePath -PathType Leaf
@@ -5687,14 +5786,12 @@ try {
             $script:ImgSettingsGear.Visibility = 'Visible'
             if ($script:TxtSettingsGearFallback) { $script:TxtSettingsGearFallback.Visibility = 'Collapsed' }
         }
-        if ($window) { $window.Icon = $settingsIcon }
-        if ($script:SettingsWindow) { $script:SettingsWindow.Icon = $settingsIcon }
-        if ($script:SiteTestWindow) { $script:SiteTestWindow.Icon = $settingsIcon }
     }
 } catch {
     Add-Log "Значок настроек не загружен: $($_.Exception.Message)" '#E8C36A'
 }
 Initialize-TrayIcon
+try { Apply-UiIcons } catch { Add-Log "Значки интерфейса не загружены: $($_.Exception.Message)" '#E8C36A' }
 $script:AllowSettingsClose = $false
 $script:AllowSiteTestClose = $false
 $script:SettingsWindow.Add_Closing({

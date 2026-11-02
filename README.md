@@ -24,6 +24,11 @@
   <img src="docs/screenshots/settings-1.0.28.png" alt="Окно настроек ZAPRET GUI" width="820">
 </p>
 
+### Новое в 1.0.31
+
+- Тёмные значки: марка Z, настройки, о программе, жук и шапки карточек Discord и YouTube
+- В трее — шестерёнка
+
 ### Новое в 1.0.30
 
 - Подбор стратегии больше не остаётся под окном настроек
@@ -148,6 +153,11 @@ Built with [Cursor](https://cursor.com). Python is not required.
 The GUI connects a zapret folder, installs the chosen strategy as a Windows service, and checks Discord and YouTube. It does not patch official strategy files.
 
 By default the app **registers itself in Windows Startup**. The close button **hides the window to the tray**; bypass keeps running.
+
+### What's new in 1.0.31
+
+- Dark icons: the Z mark, settings, about, the bug report, and the Discord and YouTube card headers
+- The tray icon is the gear
 
 ### What's new in 1.0.30
 
